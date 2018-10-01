@@ -25,6 +25,7 @@ def _dump_btree_recs(buf, start):
     # Ask about the header record in the header node
     bthDepth, bthRoot, bthNRecs, bthFNode, bthLNode, bthNodeSize, bthKeyLen, bthNNodes, bthFree = \
     struct.unpack_from('>HLLLLHHLL', header_rec)
+    # print('btree', bthDepth, bthRoot, bthNRecs, bthFNode, bthLNode, bthNodeSize, bthKeyLen, bthNNodes, bthFree)
 
     # And iterate through the linked list of leaf nodes
     this_leaf = bthFNode
@@ -62,6 +63,17 @@ def _will_fit_in_leaf_node(keyvals):
 def _will_fit_in_index_node(keyvals):
     return len(keyvals) <= 8
 
+def _bits(ntotal, nset):
+    nset = max(nset, 0)
+    nset = min(nset, ntotal)
+    a = b'\xFF' * (nset // 8)
+    c = b'\x00' * ((ntotal-nset) // 8)
+    if (len(a) + len(c)) * 8 < ntotal:
+        b = [b'\x00', b'\x80', b'\xC0', b'\xE0', b'\xF0', b'\xF8', b'\xFC', b'\xFE', b'\xFF'][nset % 8]
+        return b''.join([a,b,c])
+    else:
+        return b''.join([a,c])
+
 class _Node:
     def __bytes__(self):
         buf = bytearray(512)
@@ -88,8 +100,10 @@ class _Node:
 
 def _mkbtree(records):
     biglist = [[[]]] # [level][node][record]
+    bthNRecs = 0
 
     for keyval in records:
+        bthNRecs += 1
         curnode = biglist[-1][-1]
         curnode.append(keyval)
         if not _will_fit_in_leaf_node(curnode):
@@ -112,11 +126,11 @@ def _mkbtree(records):
     biglist.reverse() # index nodes then leaf nodes
 
     # cool, now biglist is of course brilliant
-    for i, level in enumerate(biglist, 1):
-        print('LEVEL', i)
-        for node in level:
-            print('(%d)' % len(node), *(rec[0] for rec in node))
-        print()
+    # for i, level in enumerate(biglist, 1):
+    #     print('LEVEL', i)
+    #     for node in level:
+    #         print('(%d)' % len(node), *(rec[0] for rec in node))
+    #     print()
 
     # Make space for a header node at element 0
     hnode = _Node()
@@ -142,11 +156,11 @@ def _mkbtree(records):
             else:
                 newnode.ndType = 0 # index node
 
-    for n in nodelist:
-        print(n.ndNHeight, n.records)
-        print()
+    # for n in nodelist:
+    #     print(n.ndNHeight, n.records)
+    #     print()
 
-    print(spiderdict)
+    # print(spiderdict)
 
     # pack the records in the index and leaf nodes
     for node in nodelist:
@@ -156,28 +170,56 @@ def _mkbtree(records):
             node.records = [_pack_index_record(k, spiderdict[node.ndNHeight+1, k]) for (k, v) in node.records]
 
     # make the map nodes so that the bitmap covers what we use
+    # (this does not yet populate the bitmap)
     bits_covered = 2048
+    mapnodes = []
     while bits_covered < len(nodelist):
         bits_covered += 3952 # bits in a max-sized record
         mapnode = _Node()
         nodelist.append(mapnode)
+        mapnodes.append(mapnode)
         mapnode.ndType = 2
         ndNHeight = 1 # fix, not sure about this
         mapnode.records = [] # fix this
 
-    # now we run back and forth to join up!
+    # now we run back and forth to join up nodes of similar type
     most_recent = {}
     for i, node in enumerate(nodelist):
         node.ndBLink = most_recent.get(node.ndType, 0)
         most_recent[node.ndType] = i
+    bthLNode = most_recent[0xFF]
     most_recent = {}
     for i, node in reversed(list(enumerate(nodelist))):
         node.ndFLink = most_recent.get(node.ndType, 0)
         most_recent[node.ndType] = i
+    bthFNode = most_recent[0xFF]
 
-    for n in nodelist:
-        print(n.__dict__)
+    # for n in nodelist:
+    #     print(n.__dict__)
 
+    bthFree = len(nodelist) // 4 # maybe limber this up in the future
+
+    # populate the bitmap (1 = used)
+    hnode.records[2] = _bits(2048, len(nodelist))
+    for i, mnode in mapnodes:
+        nset = len(nodelist) - 2048 - i*3952
+        mnode.records = [_bits(3952, nset)]
+
+    # populate the header node:
+    bthDepth = len(biglist)
+    bthRoot = 1 # root node is first-but-one
+    # bthNRecs set above
+    # bthFNode/bthLNode also set above
+    bthNodeSize = 512
+    bthKeyLen = 37
+    bthNNodes = len(nodelist) + bthFree # how do we calculate this?
+    # bthFree set above
+    hnode.records[0] = struct.pack('>HLLLLHHLL76x',
+        bthDepth, bthRoot, bthNRecs, bthFNode, bthLNode,
+        bthNodeSize, bthKeyLen, bthNNodes, bthFree)
+
+    # last little hack: append free nodes to nodelist
+    nodelist.append(512 * bthFree) # these will become zeroes
     return b''.join(bytes(node) for node in nodelist)
 
 def _catrec_sorter(b):
@@ -273,6 +315,18 @@ class Folder(_AbstractFolder):
         self.crdat = self.mddat = self.bkdat = 0
 
 
+def _chunkify(b, blksize):
+    for i in range(0, len(b), blksize):
+        ab = b[i:i+blksize]
+        if len(ab) < blksize: ab += bytes(blksize-len(ab))
+        yield ab
+
+
+class _TempWrapper:
+    def __init__(self, of):
+        self.of = of
+
+
 class Volume(_AbstractFolder):
     def __init__(self):
         super().__init__()
@@ -363,34 +417,83 @@ class Volume(_AbstractFolder):
 
                     setattr(f, fork, accum)
 
+            # elif datatype == 3:
+            #     print('dir thread:', rec)
+            # elif datatype == 4:
+            #     print('fil thread:', rec)
+
         for parent, children in childrenof.items():
             if parent != 1: # not the mythical parent of root!
                 cnids[parent].update(children)
 
         self.update(cnids[2])
 
-    def write(self, size=None):
-        pass
+    def write(self, size):
+        size -= size % 512
 
-        drAlBlkSiz = 4096
+        # choose an alloc block size
+        drAlBlkSiz = 512
+        while drAlBlkSiz * 65536 < size:
+            drAlBlkSiz += 512
 
-        catalog = []
+        # decide how many bitmap blocks we need
+        nbitblks = 0
+        while (size - (3 + nbitblks) * 512) // drAlBlkSiz < nbitblks * 512 * 8:
+            nbitblks += 1
 
-        cnids = {} # keys are path-component-tuples
-        objects = {}
-        next_cnid = 16
+        # decide how many alloc blocks there will be
+        drNmAlBlks = (size - (3 + nbitblks) * 512) // drAlBlkSiz
+        blkaccum = []
 
+        # <<< put the empty extents overflow file in here >>>
+
+        # write all the files in the volume
+        topwrap = _TempWrapper(self)
+        topwrap.path = (self.drVN,)
+        topwrap.cnid = 2
+
+        godwrap = _TempWrapper(None)
+        godwrap.cnid = 1
+
+        path2wrap = {(): godwrap, (self.drVN,): topwrap}
+        drNxtCNID = 16
         for path, obj in self.paths():
-            # what needs to happen here? we create a file/folder entry, a thread entry, what else?
-
-            cnids[path] = next_cnid; this_cnid = next_cnid; next_cnid += 1
-            objects[path] = obj
+            path = (self.drVN,) + path
+            wrap = _TempWrapper(obj)
+            path2wrap[path] = wrap
+            wrap.path = path
+            wrap.cnid = drNxtCNID; drNxtCNID += 1
 
             if isinstance(obj, File):
+                wrap.dfrk, wrap.rfrk = None, None
+                if obj.data:
+                    pre = len(blkaccum)
+                    blkaccum.extend(_chunkify(obj.data, drAlBlkSiz))
+                    wrap.dfrk = (pre, len(obj.data))
+                if obj.rsrc:
+                    pre = len(blkaccum)
+                    blkaccum.extend(_chunkify(obj.rsrc, drAlBlkSiz))
+                    wrap.rfrk = (pre, len(obj.rsrc))
+
+        catalog = [] # (key, value) tuples
+
+        drFilCnt = drDirCnt = 0
+
+        for path, wrap in path2wrap.items():
+            if wrap.cnid == 1: continue
+
+            obj = wrap.of
+
+            mainrec_key = struct.pack('>LB', path2wrap[path[:-1]].cnid, len(path[-1])) + path[-1]
+
+            if isinstance(wrap.of, File):
+                drFilCnt += 1
+
+                cdrType = 2
                 filFlags = 0 # todo must fix
                 filTyp = 0
                 filUsrWds = struct.pack('>4s4sHHHxxxxxx', obj.type, obj.creator, obj.flags, obj.x, obj.y)
-                filFlNum = next_cnid
+                filFlNum = wrap.cnid
                 filStBlk, filLgLen, filPyLen = 0, len(obj.data), _pad_up(len(obj.data), drAlBlkSiz) # todo must fix
                 filRStBlk, filRLgLen, filRPyLen = 0, len(obj.rsrc), _pad_up(len(obj.rsrc), drAlBlkSiz) # todo must fix
                 filCrDat, filMdDat, filBkDat = obj.crdat, obj.mddat, obj.bkdat
@@ -399,26 +502,82 @@ class Volume(_AbstractFolder):
                 filExtRec = struct.pack('>HHHHHH', 0, _pad_up(len(obj.data), drAlBlkSiz) // drAlBlkSiz, 0, 0, 0, 0)
                 filRExtRec = struct.pack('>HHHHHH', 0, _pad_up(len(obj.rsrc), drAlBlkSiz) // drAlBlkSiz, 0, 0, 0, 0)
 
-                rec = bytearray(struct.pack('>BB16sLHLLHLLLLL16sH12s12sxxxx',
+                mainrec_val = struct.pack('>BxBB16sLHLLHLLLLL16sH12s12sxxxx',
+                    cdrType, \
                     filFlags, filTyp, filUsrWds, filFlNum, \
                     filStBlk, filLgLen, filPyLen, \
                     filRStBlk, filRLgLen, filRPyLen, \
                     filCrDat, filMdDat, filBkDat, \
                     filFndrInfo, filClpSize, \
                     filExtRec, filRExtRec, \
-                ))
+                )
 
-                catalog.append((path[-1], rec))
+            else: # assume directory
+                drDirCnt += 1
 
-        catalog.sort(key=_catrec_sorter)
-        _mkbtree(catalog)
+                cdrType = 1
+                dirFlags = 0 # must fix
+                dirVal = len(wrap.of)
+                dirDirID = wrap.cnid
+                dirCrDat, dirMdDat, dirBkDat = (0,0,0) if obj is self else (obj.crdat, obj.mddat, obj.bkdat)
+                dirUsrInfo = bytes(16)
+                dirFndrInfo = bytes(16)
+                mainrec_val = struct.pack('>BxHHLLLL16s16sxxxxxxxx',
+                    cdrType, dirFlags, dirVal, dirDirID,
+                    dirCrDat, dirMdDat, dirBkDat,
+                    dirUsrInfo, dirFndrInfo,
+                )
+
+            catalog.append((mainrec_key, mainrec_val))
+
+            thdrec_key = struct.pack('>L', wrap.cnid)
+            thdrec_val_type = 4 if isinstance(wrap.of, File) else 3
+            thdrec_val = struct.pack('>BxxxxxxxxxLB', thdrec_val_type, path2wrap[path[:-1]].cnid, len(path[-1])) + path[-1]
+
+            catalog.append((thdrec_key, thdrec_val))
+
+        # now it is time to sort these records! fuck that shit...
+        # catalog.sort...
+        catalogfile = _mkbtree(catalog)
+        # also need to do some cleverness to ensure that this gets picked up...
+        drCTFlSize = len(catalogfile)
+        drCTExtRec_Start = len(blkaccum)
+        blkaccum.extend(_chunkify(catalogfile, drAlBlkSiz))
+        drCTExtRec_Cnt = len(blkaccum) - drCTExtRec_Start
+
+        # Create the bitmap of free volume allocation blocks
+        bitmap = _bits(nbitblks * 512 * 8, len(blkaccum))
+
+        # Create the Volume Information Block
+        drSigWord = b'BD'
+        drNmFls = sum(isinstance(x, File) for x in self.values())
+        drNmRtDirs = sum(not isinstance(x, File) for x in self.values())
+        drVBMSt = 3 # first block of volume bitmap
+        drAllocPtr = len(blkaccum)
+        drClpSiz = drXTClpSiz = drCTClpSiz = drAlBlkSiz
+        drAlBlSt = 3 + nbitblks
+        drFreeBks = drNmAlBlks - len(blkaccum)
+        drWrCnt = 0 # ????volume write count
+        drVCSize = drVBMCSize = drCtlCSize = 99
+        drXTFlSize = 0 # currently faking out the extents overflow file
+        drXTExtRec_Start = 0
+        drXTExtRec_Cnt = 0
+
+        headernode = struct.pack('2sLLHHHHHLLHLH28pLHLLLHLL32sHHHLHHxxxxxxxxLHHxxxxxxxx',
+            drSigWord, self.drCrDate, self.drLsMod, self.drAtrb, drNmFls,
+            drVBMSt, drAllocPtr, drNmAlBlks, drAlBlkSiz, drClpSiz, drAlBlSt,
+            drNxtCNID, drFreeBks, self.drVN, self.drVolBkUp, self.drVSeqNum,
+            drWrCnt, drXTClpSiz, drCTClpSiz, drNmRtDirs, drFilCnt, drDirCnt,
+            self.drFndrInfo, drVCSize, drVBMCSize, drCtlCSize,
+            drXTFlSize, drXTExtRec_Start, drXTExtRec_Cnt,
+            drCTFlSize, drCTExtRec_Start, drCTExtRec_Cnt,
+        )
 
 
-
-
-
-
-
+        assert all(len(x) == drAlBlkSiz for x in blkaccum)
+        finalchunks = [self.bootblocks, headernode, bitmap, *blkaccum]
+        finalchunks.append(bytes(size - sum(len(x) for x in finalchunks)))
+        return b''.join(finalchunks)
 
 
 import sys
@@ -433,8 +592,9 @@ h.read(open(infile,'rb').read())
 # pprint.pprint(h)
 # for path, obj in h.paths():
 #     print(path, obj)
-h.write()
+open('/tmp/thing','wb').write(h.write(128*1024*1024))
 # h.walk_catalog()
+
 
 
 
