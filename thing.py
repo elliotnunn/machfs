@@ -492,15 +492,15 @@ class Volume(_AbstractFolder):
             wrap.cnid = drNxtCNID; drNxtCNID += 1
 
             if isinstance(obj, File):
-                wrap.dfrk, wrap.rfrk = None, None
+                wrap.dfrk = wrap.rfrk = (0, 0)
                 if obj.data:
                     pre = len(blkaccum)
                     blkaccum.extend(_chunkify(obj.data, drAlBlkSiz))
-                    wrap.dfrk = (pre, len(obj.data))
+                    wrap.dfrk = (pre, len(blkaccum)-pre)
                 if obj.rsrc:
                     pre = len(blkaccum)
                     blkaccum.extend(_chunkify(obj.rsrc, drAlBlkSiz))
-                    wrap.rfrk = (pre, len(obj.rsrc))
+                    wrap.rfrk = (pre, len(blkaccum)-pre)
 
         catalog = [] # (key, value) tuples
 
@@ -526,8 +526,8 @@ class Volume(_AbstractFolder):
                 filCrDat, filMdDat, filBkDat = obj.crdat, obj.mddat, obj.bkdat
                 filFndrInfo = bytes(16) # todo must fix
                 filClpSize = 0 # todo must fix
-                filExtRec = struct.pack('>HHHHHH', 0, _pad_up(len(obj.data), drAlBlkSiz) // drAlBlkSiz, 0, 0, 0, 0)
-                filRExtRec = struct.pack('>HHHHHH', 0, _pad_up(len(obj.rsrc), drAlBlkSiz) // drAlBlkSiz, 0, 0, 0, 0)
+                filExtRec = struct.pack('>HHHHHH', *wrap.dfrk, 0, 0, 0, 0)
+                filRExtRec = struct.pack('>HHHHHH', *wrap.rfrk, 0, 0, 0, 0)
 
                 mainrec_val = struct.pack('>BxBB16sLHLLHLLLLL16sH12s12sxxxx',
                     cdrType, \
