@@ -1,5 +1,4 @@
 import struct
-import copy
 import collections
 
 
@@ -38,24 +37,16 @@ def _dump_btree_recs(buf, start):
             break
         this_leaf = ndFLink
 
-def _choose_alloc_size(total_logical_blocks):
-    """Guess a good number of physical blocks per allocation block"""
-    size = 1
-    while size * 65536 < 0.99 * total_logical_blocks:
-        size += 1
-    return size
-
-def _pack_leaf_record(key, value):
-    b = bytes([len(key)]) + key
+def _pack_leaf_record(key, value): # works correctly
+    b = bytes([len(key)+1, 0, *key])
     if len(b) & 1: b += bytes(1)
     b += value
     return b
 
 def _pack_index_record(key, pointer):
-    b = bytes([0x25]) + key
-    b += bytes(0x26 - len(b))
-    b += struct.pack('>L', pointer) # check this: are pointers meant to be 4 bytes?
-    return b
+    key += bytes(0x24 - len(key))
+    value = struct.pack('>L', pointer)
+    return _pack_leaf_record(key, value)
 
 def _will_fit_in_leaf_node(keyvals):
     return len(keyvals) <= 2 # really must fix this!
@@ -126,11 +117,11 @@ def _mkbtree(records):
     biglist.reverse() # index nodes then leaf nodes
 
     # cool, now biglist is of course brilliant
-    # for i, level in enumerate(biglist, 1):
-    #     print('LEVEL', i)
-    #     for node in level:
-    #         print('(%d)' % len(node), *(rec[0] for rec in node))
-    #     print()
+    for i, level in enumerate(biglist, 1):
+        print('LEVEL', i)
+        for node in level:
+            print('(%d)' % len(node), *(rec[0] for rec in node))
+        print()
 
     # Make space for a header node at element 0
     hnode = _Node()
@@ -143,7 +134,8 @@ def _mkbtree(records):
 
     for i, level in enumerate(biglist, 1):
         for node in level:
-            firstkey = node[0][0]
+            if len(node) == 0: continue
+            firstkey, firstval = node[0]
             spiderdict[i, firstkey] = len(nodelist)
 
             newnode = _Node()
@@ -174,6 +166,7 @@ def _mkbtree(records):
     bits_covered = 2048
     mapnodes = []
     while bits_covered < len(nodelist):
+        print('making map node!')
         bits_covered += 3952 # bits in a max-sized record
         mapnode = _Node()
         nodelist.append(mapnode)
@@ -187,12 +180,12 @@ def _mkbtree(records):
     for i, node in enumerate(nodelist):
         node.ndBLink = most_recent.get(node.ndType, 0)
         most_recent[node.ndType] = i
-    bthLNode = most_recent[0xFF]
+    bthLNode = most_recent.get(0xFF, 0)
     most_recent = {}
     for i, node in reversed(list(enumerate(nodelist))):
         node.ndFLink = most_recent.get(node.ndType, 0)
         most_recent[node.ndType] = i
-    bthFNode = most_recent[0xFF]
+    bthFNode = most_recent.get(0xFF, 0)
 
     # for n in nodelist:
     #     print(n.__dict__)
@@ -223,7 +216,6 @@ def _mkbtree(records):
     return b''.join(bytes(node) for node in nodelist)
 
 def _catrec_sorter(b):
-    return b # must fix this later on
     order = [
         0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
         0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
@@ -265,9 +257,17 @@ def _catrec_sorter(b):
         0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7,
         0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff,
     ]
-    length = b[4]
-    name = b[5:5+length]
-    return b[:4] + bytes(order[ch] for ch in name)
+
+    b = b[0] # we are only sorting keys!
+
+    return b[:4] + bytes(order[ch] for ch in b[5:])
+
+def _suggest_allocblk_size(volsize, minalign):
+    min_nonalloc_blks = 6 # just for this estimation
+    retval = minalign
+    while volsize - min_nonalloc_blks*512 > retval*65536:
+        retval += minalign
+    return retval
 
 
 class File:
@@ -365,18 +365,23 @@ class Volume(_AbstractFolder):
 
         for rec in _dump_btree_recs(from_volume, 512*drAlBlSt + drAlBlkSiz*drCTExtRec_Start):
             # create a directory tree from the catalog file
-            if rec[0] == 0: continue
             rec_len = rec[0]
-            key = rec[1:1+rec_len]
+            if rec_len == 0: continue
+
+            key = rec[2:1+rec_len]
             val = rec[_pad_up(1+rec_len, 2):]
 
-            ckrParID, namelen = struct.unpack_from('>LB', key, 1)
+            ckrParID, namelen = struct.unpack_from('>LB', key)
             ckrCName = key[6:6+namelen]
 
-            datatype = val[0]
+            datatype = (None, 'dir', 'file', 'dthread', 'fthread')[val[0]]
             datarec = val[2:]
 
-            if datatype == 1: # directory
+            print(datatype)
+            print('\t', key)
+            print('\t', datarec)
+
+            if datatype == 'dir':
                 dirFlags, dirVal, dirDirID, dirCrDat, dirMdDat, dirBkDat, dirUsrInfo, dirFndrInfo \
                 = struct.unpack_from('>HHLLLL16s16s', datarec)
 
@@ -386,7 +391,7 @@ class Volume(_AbstractFolder):
 
                 f.crdat, f.mddat, f.bkdat = dirCrDat, dirMdDat, dirBkDat
 
-            elif datatype == 2: # file (ignore "thread records" when reading)
+            elif datatype == 'file':
                 filFlags, filTyp, filUsrWds, filFlNum, \
                 filStBlk, filLgLen, filPyLen, \
                 filRStBlk, filRLgLen, filRPyLen, \
@@ -428,24 +433,46 @@ class Volume(_AbstractFolder):
 
         self.update(cnids[2])
 
-    def write(self, size):
-        size -= size % 512
+    def write(self, size=800*1024, align=512):
+        if align < 512 or align % 512:
+            raise ValueError('align must be multiple of 512')
 
-        # choose an alloc block size
-        drAlBlkSiz = 512
-        while drAlBlkSiz * 65536 < size:
-            drAlBlkSiz += 512
+        if size < 400 * 1024 or size % 512:
+            raise ValueError('size must be a multiple of 512b and >= 800K')
 
-        # decide how many bitmap blocks we need
-        nbitblks = 0
-        while (size - (3 + nbitblks) * 512) // drAlBlkSiz < nbitblks * 512 * 8:
-            nbitblks += 1
+        # overall layout:
+        #   1. two boot blocks (offset=0)
+        #   2. one volume control block (offset=2)
+        #   3. some bitmap blocks (offset=3)
+        #   4. many allocation blocks
+        #   5. duplicate VCB (offset=-2)
+        #   6. unused block (offset=-1)
+
+        # so we will our best guess at these variables as we go:
+        # drNmAlBlks, drAlBlkSiz, drAlBlSt
+
+        # the smallest possible alloc block size
+        drAlBlkSiz = _suggest_allocblk_size(size, align)
+
+        # how many blocks will we use for the bitmap?
+        # (cheat by adding blocks to align the alloc area)
+        bitmap_blk_cnt = 0
+        while (size - (5+bitmap_blk_cnt)*512) // drAlBlkSiz > bitmap_blk_cnt*512*8:
+            bitmap_blk_cnt += 1
+        while (3+bitmap_blk_cnt)*512 % align:
+            bitmap_blk_cnt += 1
 
         # decide how many alloc blocks there will be
-        drNmAlBlks = (size - (3 + nbitblks) * 512) // drAlBlkSiz
+        drNmAlBlks = (size - (5+bitmap_blk_cnt)*512) // drAlBlkSiz
         blkaccum = []
 
         # <<< put the empty extents overflow file in here >>>
+        extoflowfile = _mkbtree([])
+        # also need to do some cleverness to ensure that this gets picked up...
+        drXTFlSize = len(extoflowfile)
+        drXTExtRec_Start = len(blkaccum)
+        blkaccum.extend(_chunkify(extoflowfile, drAlBlkSiz))
+        drXTExtRec_Cnt = len(blkaccum) - drXTExtRec_Start
 
         # write all the files in the volume
         topwrap = _TempWrapper(self)
@@ -530,11 +557,13 @@ class Volume(_AbstractFolder):
 
             catalog.append((mainrec_key, mainrec_val))
 
-            thdrec_key = struct.pack('>L', wrap.cnid)
+            thdrec_key = struct.pack('>Lx', wrap.cnid)
             thdrec_val_type = 4 if isinstance(wrap.of, File) else 3
             thdrec_val = struct.pack('>BxxxxxxxxxLB', thdrec_val_type, path2wrap[path[:-1]].cnid, len(path[-1])) + path[-1]
 
             catalog.append((thdrec_key, thdrec_val))
+
+        catalog.sort(key=_catrec_sorter)
 
         # now it is time to sort these records! fuck that shit...
         # catalog.sort...
@@ -545,8 +574,11 @@ class Volume(_AbstractFolder):
         blkaccum.extend(_chunkify(catalogfile, drAlBlkSiz))
         drCTExtRec_Cnt = len(blkaccum) - drCTExtRec_Start
 
+        if len(blkaccum) > drNmAlBlks:
+            raise ValueError('Does not fit!')
+
         # Create the bitmap of free volume allocation blocks
-        bitmap = _bits(nbitblks * 512 * 8, len(blkaccum))
+        bitmap = _bits(bitmap_blk_cnt * 512 * 8, len(blkaccum))
 
         # Create the Volume Information Block
         drSigWord = b'BD'
@@ -555,15 +587,12 @@ class Volume(_AbstractFolder):
         drVBMSt = 3 # first block of volume bitmap
         drAllocPtr = len(blkaccum)
         drClpSiz = drXTClpSiz = drCTClpSiz = drAlBlkSiz
-        drAlBlSt = 3 + nbitblks
+        drAlBlSt = 3 + bitmap_blk_cnt
         drFreeBks = drNmAlBlks - len(blkaccum)
         drWrCnt = 0 # ????volume write count
         drVCSize = drVBMCSize = drCtlCSize = 99
-        drXTFlSize = 0 # currently faking out the extents overflow file
-        drXTExtRec_Start = 0
-        drXTExtRec_Cnt = 0
 
-        headernode = struct.pack('2sLLHHHHHLLHLH28pLHLLLHLL32sHHHLHHxxxxxxxxLHHxxxxxxxx',
+        vib = struct.pack('>2sLLHHHHHLLHLH28pLHLLLHLL32sHHHLHHxxxxxxxxLHHxxxxxxxx',
             drSigWord, self.drCrDate, self.drLsMod, self.drAtrb, drNmFls,
             drVBMSt, drAllocPtr, drNmAlBlks, drAlBlkSiz, drClpSiz, drAlBlSt,
             drNxtCNID, drFreeBks, self.drVN, self.drVolBkUp, self.drVSeqNum,
@@ -572,11 +601,13 @@ class Volume(_AbstractFolder):
             drXTFlSize, drXTExtRec_Start, drXTExtRec_Cnt,
             drCTFlSize, drCTExtRec_Start, drCTExtRec_Cnt,
         )
-
+        vib += bytes(512-len(vib))
 
         assert all(len(x) == drAlBlkSiz for x in blkaccum)
-        finalchunks = [self.bootblocks, headernode, bitmap, *blkaccum]
-        finalchunks.append(bytes(size - sum(len(x) for x in finalchunks)))
+        finalchunks = [self.bootblocks, vib, bitmap, *blkaccum]
+        finalchunks.append(bytes(size - sum(len(x) for x in finalchunks) - 2*512))
+        finalchunks.append(vib)
+        finalchunks.append(bytes(512))
         return b''.join(finalchunks)
 
 
@@ -586,16 +617,28 @@ if sys.argv[1:]:
 else:
     infile = 'SourceForEmulator.dmg'
 import pprint
-h = Volume()
-h.read(open(infile,'rb').read())
+
+
+print(_mkbtree([]))
+
+# h = Volume()
+# h.read(open(infile,'rb').read())
+
+
 # open('/tmp/aj', 'wb').write(h[b'Extensions'][b'AppleJack 2.1'].rsrc)
 # pprint.pprint(h)
 # for path, obj in h.paths():
 #     print(path, obj)
-open('/tmp/thing','wb').write(h.write(128*1024*1024))
-# h.walk_catalog()
 
 
+h = Volume()
+f = File()
+h[b'file'] = f
+wr = h.write(800*1024)
+open(infile,'wb').write(wr)
+
+h2 = Volume()
+h2.read(wr)
 
 
 
