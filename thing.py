@@ -25,6 +25,7 @@ def _dump_btree_recs(buf, start):
     bthDepth, bthRoot, bthNRecs, bthFNode, bthLNode, bthNodeSize, bthKeyLen, bthNNodes, bthFree = \
     struct.unpack_from('>HLLLLHHLL', header_rec)
     # print('btree', bthDepth, bthRoot, bthNRecs, bthFNode, bthLNode, bthNodeSize, bthKeyLen, bthNNodes, bthFree)
+    print('btree', bthKeyLen)
 
     # And iterate through the linked list of leaf nodes
     this_leaf = bthFNode
@@ -89,7 +90,7 @@ class _Node:
 
         return bytes(buf)
 
-def _mkbtree(records):
+def _mkbtree(records, bthKeyLen):
     biglist = [[[]]] # [level][node][record]
     bthNRecs = 0
 
@@ -134,9 +135,9 @@ def _mkbtree(records):
 
     for i, level in enumerate(biglist, 1):
         for node in level:
-            if len(node) == 0: continue
-            firstkey, firstval = node[0]
-            spiderdict[i, firstkey] = len(nodelist)
+            if len(node) > 0:
+                firstkey, firstval = node[0]
+                spiderdict[i, firstkey] = len(nodelist)
 
             newnode = _Node()
             nodelist.append(newnode)
@@ -172,8 +173,7 @@ def _mkbtree(records):
         nodelist.append(mapnode)
         mapnodes.append(mapnode)
         mapnode.ndType = 2
-        ndNHeight = 1 # fix, not sure about this
-        mapnode.records = [] # fix this
+        ndNHeight = 1
 
     # now we run back and forth to join up nodes of similar type
     most_recent = {}
@@ -204,7 +204,6 @@ def _mkbtree(records):
     # bthNRecs set above
     # bthFNode/bthLNode also set above
     bthNodeSize = 512
-    bthKeyLen = 37
     bthNNodes = len(nodelist) + bthFree # how do we calculate this?
     # bthFree set above
     hnode.records[0] = struct.pack('>HLLLLHHLL76x',
@@ -467,7 +466,7 @@ class Volume(_AbstractFolder):
         blkaccum = []
 
         # <<< put the empty extents overflow file in here >>>
-        extoflowfile = _mkbtree([])
+        extoflowfile = _mkbtree([], 7)
         # also need to do some cleverness to ensure that this gets picked up...
         drXTFlSize = len(extoflowfile)
         drXTExtRec_Start = len(blkaccum)
@@ -517,12 +516,12 @@ class Volume(_AbstractFolder):
                 drFilCnt += 1
 
                 cdrType = 2
-                filFlags = 0 # todo must fix
+                filFlags = 1 << 1 # file thread record exists, but is not locked, nor "file record is used"
                 filTyp = 0
                 filUsrWds = struct.pack('>4s4sHHHxxxxxx', obj.type, obj.creator, obj.flags, obj.x, obj.y)
                 filFlNum = wrap.cnid
-                filStBlk, filLgLen, filPyLen = 0, len(obj.data), _pad_up(len(obj.data), drAlBlkSiz) # todo must fix
-                filRStBlk, filRLgLen, filRPyLen = 0, len(obj.rsrc), _pad_up(len(obj.rsrc), drAlBlkSiz) # todo must fix
+                filStBlk, filLgLen, filPyLen = wrap.dfrk[0], len(obj.data), _pad_up(len(obj.data), drAlBlkSiz)
+                filRStBlk, filRLgLen, filRPyLen = wrap.rfrk[0], len(obj.rsrc), _pad_up(len(obj.rsrc), drAlBlkSiz)
                 filCrDat, filMdDat, filBkDat = obj.crdat, obj.mddat, obj.bkdat
                 filFndrInfo = bytes(16) # todo must fix
                 filClpSize = 0 # todo must fix
@@ -567,7 +566,7 @@ class Volume(_AbstractFolder):
 
         # now it is time to sort these records! fuck that shit...
         # catalog.sort...
-        catalogfile = _mkbtree(catalog)
+        catalogfile = _mkbtree(catalog, 37)
         # also need to do some cleverness to ensure that this gets picked up...
         drCTFlSize = len(catalogfile)
         drCTExtRec_Start = len(blkaccum)
@@ -590,7 +589,7 @@ class Volume(_AbstractFolder):
         drAlBlSt = 3 + bitmap_blk_cnt
         drFreeBks = drNmAlBlks - len(blkaccum)
         drWrCnt = 0 # ????volume write count
-        drVCSize = drVBMCSize = drCtlCSize = 99
+        drVCSize = drVBMCSize = drCtlCSize = 0
 
         vib = struct.pack('>2sLLHHHHHLLHLH28pLHLLLHLL32sHHHLHHxxxxxxxxLHHxxxxxxxx',
             drSigWord, self.drCrDate, self.drLsMod, self.drAtrb, drNmFls,
@@ -619,7 +618,11 @@ else:
 import pprint
 
 
-print(_mkbtree([]))
+# Volume().read(open('SourceForEmulator.dmg', 'rb').read())
+# exit()
+
+
+# print(_mkbtree([]))
 
 # h = Volume()
 # h.read(open(infile,'rb').read())
@@ -634,6 +637,7 @@ print(_mkbtree([]))
 h = Volume()
 f = File()
 h[b'file'] = f
+f.data = b'mydatafork\r'
 wr = h.write(800*1024)
 open(infile,'wb').write(wr)
 
