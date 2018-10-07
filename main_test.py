@@ -19,7 +19,7 @@ def test_roundtrip():
 
 def test_macos_mount():
     h = Volume()
-    h.drVN = b'ElmoTest'
+    h.name = b'ElmoTest'
     hf = File()
     hf.data = b'12345' * 10
     for i in reversed(range(100)):

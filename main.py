@@ -101,26 +101,26 @@ class Volume(_directory.AbstractFolder):
         super().__init__()
 
         self.bootblocks = bytes(1024)       # optional; for booting HFS volumes
-        self.drCrDate = 0                   # date and time of volume creation
-        self.drLsMod = 0                    # date and time of last modification
-        self.drAtrb = 1<<8                  # volume attributes (hwlock, swlock, CLEANUNMOUNT, badblocks)
-        self.drVN = b'Untitled'             # volume name Pascal string
-        self.drVolBkUp = 0                  # date and time of last backup
-        self.drVSeqNum = 0                  # volume backup sequence number
-        self.drFndrInfo = bytes(32)         # information used by the Finder
+        self.crdate = 0                     # date and time of volume creation
+        self.lsmod = 0                      # date and time of last modification
+        self.name = b'Untitled'
 
     def read(self, from_volume):
         self._dirtree = {}
         self.bootblocks = from_volume[:1024]
 
-        drSigWord, self.drCrDate, self.drLsMod, self.drAtrb, drNmFls, \
+        drSigWord, drCrDate, drLsMod, drAtrb, drNmFls, \
         drVBMSt, drAllocPtr, drNmAlBlks, drAlBlkSiz, drClpSiz, drAlBlSt, \
-        drNxtCNID, drFreeBks, self.drVN, self.drVolBkUp, self.drVSeqNum, \
+        drNxtCNID, drFreeBks, drVN, drVolBkUp, drVSeqNum, \
         drWrCnt, drXTClpSiz, drCTClpSiz, drNmRtDirs, drFilCnt, drDirCnt, \
-        self.drFndrInfo, drVCSize, drVBMCSize, drCtlCSize, \
+        drFndrInfo, drVCSize, drVBMCSize, drCtlCSize, \
         drXTFlSize, drXTExtRec, \
         drCTFlSize, drCTExtRec, \
         = struct.unpack_from('>2sLLHHHHHLLHLH28pLHLLLHLL32sHHHL12sL12s', from_volume, 1024)
+
+        self.crdate = drCrDate
+        self.lsmod = drLsMod
+        self.name = drVN
 
         block2offset = lambda block: 512*drAlBlSt + drAlBlkSiz*block
         extent2bytes = lambda firstblk, blkcnt: from_volume[block2offset(firstblk):block2offset(firstblk+blkcnt)]
@@ -248,16 +248,16 @@ class Volume(_directory.AbstractFolder):
 
         # write all the files in the volume
         topwrap = _TempWrapper(self)
-        topwrap.path = (self.drVN,)
+        topwrap.path = (self.name,)
         topwrap.cnid = 2
 
         godwrap = _TempWrapper(None)
         godwrap.cnid = 1
 
-        path2wrap = {(): godwrap, (self.drVN,): topwrap}
+        path2wrap = {(): godwrap, (self.name,): topwrap}
         drNxtCNID = 16
-        for path, obj in self.paths():
-            path = (self.drVN,) + path
+        for path, obj in self.iter_paths():
+            path = (self.name,) + path
             wrap = _TempWrapper(obj)
             path2wrap[path] = wrap
             wrap.path = path
@@ -363,13 +363,20 @@ class Volume(_directory.AbstractFolder):
         drFreeBks = drNmAlBlks - len(blkaccum)
         drWrCnt = 0 # ????volume write count
         drVCSize = drVBMCSize = drCtlCSize = 0
+        drAtrb = 1<<8                  # volume attributes (hwlock, swlock, CLEANUNMOUNT, badblocks)
+        drVN = self.name
+        drVolBkUp = 0                  # date and time of last backup
+        drVSeqNum = 0                  # volume backup sequence number
+        drFndrInfo = bytes(32)         # information used by the Finder
+        drCrDate = self.crdate
+        drLsMod = self.lsmod
 
         vib = struct.pack('>2sLLHHHHHLLHLH28pLHLLLHLL32sHHHLHHxxxxxxxxLHHxxxxxxxx',
-            drSigWord, self.drCrDate, self.drLsMod, self.drAtrb, drNmFls,
+            drSigWord, drCrDate, drLsMod, drAtrb, drNmFls,
             drVBMSt, drAllocPtr, drNmAlBlks, drAlBlkSiz, drClpSiz, drAlBlSt,
-            drNxtCNID, drFreeBks, self.drVN, self.drVolBkUp, self.drVSeqNum,
+            drNxtCNID, drFreeBks, drVN, drVolBkUp, drVSeqNum,
             drWrCnt, drXTClpSiz, drCTClpSiz, drNmRtDirs, drFilCnt, drDirCnt,
-            self.drFndrInfo, drVCSize, drVBMCSize, drCtlCSize,
+            drFndrInfo, drVCSize, drVBMCSize, drCtlCSize,
             drXTFlSize, drXTExtRec_Start, drXTExtRec_Cnt,
             drCTFlSize, drCTExtRec_Start, drCTExtRec_Cnt,
         )
