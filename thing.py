@@ -25,7 +25,6 @@ def _dump_btree_recs(buf, start):
     bthDepth, bthRoot, bthNRecs, bthFNode, bthLNode, bthNodeSize, bthKeyLen, bthNNodes, bthFree = \
     struct.unpack_from('>HLLLLHHLL', header_rec)
     # print('btree', bthDepth, bthRoot, bthNRecs, bthFNode, bthLNode, bthNodeSize, bthKeyLen, bthNNodes, bthFree)
-    print('btree', bthKeyLen)
 
     # And iterate through the linked list of leaf nodes
     this_leaf = bthFNode
@@ -39,6 +38,7 @@ def _dump_btree_recs(buf, start):
         this_leaf = ndFLink
 
 def _pack_leaf_record(key, value): # works correctly
+    if len(value) & 1: value += b'\x00'
     b = bytes([len(key)+1, 0, *key])
     if len(b) & 1: b += bytes(1)
     b += value
@@ -115,14 +115,16 @@ def _mkbtree(records, bthKeyLen):
                 curnode = [keyval]
                 biglist[-1].append(curnode)
 
+    if biglist == [[[]]]: biglist = []
+
     biglist.reverse() # index nodes then leaf nodes
 
     # cool, now biglist is of course brilliant
-    for i, level in enumerate(biglist, 1):
-        print('LEVEL', i)
-        for node in level:
-            print('(%d)' % len(node), *(rec[0] for rec in node))
-        print()
+    # for i, level in enumerate(biglist, 1):
+    #     print('LEVEL', i)
+    #     for node in level:
+    #         print('(%d)' % len(node), *(rec[0] for rec in node))
+    #     print()
 
     # Make space for a header node at element 0
     hnode = _Node()
@@ -167,7 +169,7 @@ def _mkbtree(records, bthKeyLen):
     bits_covered = 2048
     mapnodes = []
     while bits_covered < len(nodelist):
-        print('making map node!')
+        # print('making map node!')
         bits_covered += 3952 # bits in a max-sized record
         mapnode = _Node()
         nodelist.append(mapnode)
@@ -191,6 +193,7 @@ def _mkbtree(records, bthKeyLen):
     #     print(n.__dict__)
 
     bthFree = len(nodelist) // 4 # maybe limber this up in the future
+    bthFree = 11 if bthKeyLen == 7 else 10 ## fix this later??
 
     # populate the bitmap (1 = used)
     hnode.records[2] = _bits(2048, len(nodelist))
@@ -200,7 +203,7 @@ def _mkbtree(records, bthKeyLen):
 
     # populate the header node:
     bthDepth = len(biglist)
-    bthRoot = 1 # root node is first-but-one
+    bthRoot = 1 if biglist else 0 # root node is first-but-one, or no node at all
     # bthNRecs set above
     # bthFNode/bthLNode also set above
     bthNodeSize = 512
@@ -333,7 +336,7 @@ class Volume(_AbstractFolder):
         self.bootblocks = bytes(1024)       # optional; for booting HFS volumes
         self.drCrDate = 0                   # date and time of volume creation
         self.drLsMod = 0                    # date and time of last modification
-        self.drAtrb = 0                     # volume attributes (hwlock, swlock, cleanunmount, badblocks)
+        self.drAtrb = 1<<8                  # volume attributes (hwlock, swlock, CLEANUNMOUNT, badblocks)
         self.drVN = b'Untitled'             # volume name Pascal string
         self.drVolBkUp = 0                  # date and time of last backup
         self.drVSeqNum = 0                  # volume backup sequence number
@@ -371,14 +374,14 @@ class Volume(_AbstractFolder):
             val = rec[_pad_up(1+rec_len, 2):]
 
             ckrParID, namelen = struct.unpack_from('>LB', key)
-            ckrCName = key[6:6+namelen]
+            ckrCName = key[5:5+namelen]
 
             datatype = (None, 'dir', 'file', 'dthread', 'fthread')[val[0]]
             datarec = val[2:]
 
-            print(datatype)
-            print('\t', key)
+            print(datatype + '\t' + repr(key))
             print('\t', datarec)
+            print()
 
             if datatype == 'dir':
                 dirFlags, dirVal, dirDirID, dirCrDat, dirMdDat, dirBkDat, dirUsrInfo, dirFndrInfo \
@@ -503,7 +506,8 @@ class Volume(_AbstractFolder):
 
         catalog = [] # (key, value) tuples
 
-        drFilCnt = drDirCnt = 0
+        drFilCnt = 0
+        drDirCnt = -1 # to exclude the root directory
 
         for path, wrap in path2wrap.items():
             if wrap.cnid == 1: continue
@@ -548,7 +552,7 @@ class Volume(_AbstractFolder):
                 dirCrDat, dirMdDat, dirBkDat = (0,0,0) if obj is self else (obj.crdat, obj.mddat, obj.bkdat)
                 dirUsrInfo = bytes(16)
                 dirFndrInfo = bytes(16)
-                mainrec_val = struct.pack('>BxHHLLLL16s16sxxxxxxxx',
+                mainrec_val = struct.pack('>BxHHLLLL16s16sxxxxxxxxxxxxxxxx',
                     cdrType, dirFlags, dirVal, dirDirID,
                     dirCrDat, dirMdDat, dirBkDat,
                     dirUsrInfo, dirFndrInfo,
@@ -584,7 +588,7 @@ class Volume(_AbstractFolder):
         drNmFls = sum(isinstance(x, File) for x in self.values())
         drNmRtDirs = sum(not isinstance(x, File) for x in self.values())
         drVBMSt = 3 # first block of volume bitmap
-        drAllocPtr = len(blkaccum)
+        drAllocPtr = 0
         drClpSiz = drXTClpSiz = drCTClpSiz = drAlBlkSiz
         drAlBlSt = 3 + bitmap_blk_cnt
         drFreeBks = drNmAlBlks - len(blkaccum)
@@ -608,85 +612,3 @@ class Volume(_AbstractFolder):
         finalchunks.append(vib)
         finalchunks.append(bytes(512))
         return b''.join(finalchunks)
-
-
-import sys
-if sys.argv[1:]:
-    infile = sys.argv[1]
-else:
-    infile = 'SourceForEmulator.dmg'
-import pprint
-
-
-# Volume().read(open('SourceForEmulator.dmg', 'rb').read())
-# exit()
-
-
-# print(_mkbtree([]))
-
-# h = Volume()
-# h.read(open(infile,'rb').read())
-
-
-# open('/tmp/aj', 'wb').write(h[b'Extensions'][b'AppleJack 2.1'].rsrc)
-# pprint.pprint(h)
-# for path, obj in h.paths():
-#     print(path, obj)
-
-
-h = Volume()
-f = File()
-h[b'file'] = f
-f.data = b'mydatafork\r'
-wr = h.write(800*1024)
-open(infile,'wb').write(wr)
-
-h2 = Volume()
-h2.read(wr)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
