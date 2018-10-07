@@ -17,14 +17,12 @@ def test_roundtrip():
     assert copies[0] == copies[1]
     assert copies[1] == copies[2]
 
-
-
 def test_macos_mount():
     h = Volume()
     h.drVN = b'ElmoTest'
     hf = File()
     hf.data = b'12345' * 10
-    for i in range(4):
+    for i in range(100):
         last = b'testfile-%03d' % i
         h[last] = hf
     ser = h.write(10*1024*1024)
