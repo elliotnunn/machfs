@@ -1,4 +1,4 @@
-from thing import *
+from main import *
 import os
 import time
 
