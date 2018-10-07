@@ -67,6 +67,11 @@ def _bits(ntotal, nset):
         return b''.join([a,c])
 
 class _Node:
+    def __init__(self, **kwargs):
+        self.records = []
+        self.ndFLink = self.ndBLink = self.ndType = self.ndNHeight = 0
+        self.__dict__.update(kwargs)
+
     def __bytes__(self):
         buf = bytearray(512)
 
@@ -86,98 +91,87 @@ class _Node:
         struct.pack_into('>H', buf, next_right, next_left) # offset of free space
 
         struct.pack_into('>LLBBH', buf, 0,
-            self.ndFLink, self.ndBLink, self.ndType, self.ndNHeight, len(self.records))
+            self.ndFLink, self.ndBLink, self.ndType, self.ndNHeight&0xFF, len(self.records))
 
         return bytes(buf)
 
+    def does_fit(self):
+        try:
+            self.__bytes__()
+        except ValueError:
+            return False
+        else:
+            return True
+
 def _mkbtree(records, bthKeyLen):
-    biglist = [[[]]] # [level][node][record]
+    nodelist = [] # append to this as we go
+
+    index_step = 8 # pointers per index node; min=2, max=11
+
+    # First node is always a header node, with three records:
+    # header records, reserved record, bitmap record
+    headnode = _Node(ndType=1, ndNHeight=0, records=['header placeholder', bytes(128), 'bitmap placeholder'])
+    nodelist.append(headnode)
+
     bthNRecs = 0
-
-    for keyval in records:
+    bthRoot = 0
+    bthDepth = 0
+    for key, val in records:
         bthNRecs += 1
-        curnode = biglist[-1][-1]
-        curnode.append(keyval)
-        if not _will_fit_in_leaf_node(curnode):
-            del curnode[-1]
-            curnode = [keyval]
-            biglist[-1].append(curnode)
+        bthRoot = 1
+        bthDepth = 1
 
-    while len(biglist[-1]) > 1:
-        biglist.append([[]])
+        packed = _pack_leaf_record(key, val)
 
-        for prevnode in biglist[-2]:
-            keyval = prevnode[0]
-            curnode = biglist[-1][-1]
-            curnode.append(keyval)
-            if not _will_fit_in_index_node(curnode):
-                del curnode[-1]
-                curnode = [keyval]
-                biglist[-1].append(curnode)
+        if bthNRecs == 1:
+            nodelist.append(_Node(ndType=0xFF, ndNHeight=1))
 
-    if biglist == [[[]]]: biglist = []
+        nodelist[-1].records.append(packed)
 
-    biglist.reverse() # index nodes then leaf nodes
+        if not nodelist[-1].does_fit():
+            nodelist[-1].records.pop()
+            nodelist.append(_Node(ndType=0xFF, ndNHeight=1, records=[packed]))
 
-    # cool, now biglist is of course brilliant
-    # for i, level in enumerate(biglist, 1):
-    #     print('LEVEL', i)
-    #     for node in level:
-    #         print('(%d)' % len(node), *(rec[0] for rec in node))
-    #     print()
+    # Create index nodes (some sort of Btree, they tell me)
+    while len(nodelist) - bthRoot > 1:
+        nums = list(range(bthRoot, len(nodelist)))
+        groups = [nums[i:i+index_step] for i in range(0, len(nums), index_step)]
 
-    # Make space for a header node at element 0
-    hnode = _Node()
-    nodelist = [hnode]
-    hnode.ndNHeight = 0
-    hnode.records = [bytes(106), bytes(128), bytes(256)]
-    hnode.ndType = 1
+        bthRoot = len(nodelist)
+        bthDepth = nodelist[-1].ndNHeight + 1
 
-    spiderdict = {} # maps (level, key) to index
-
-    for i, level in enumerate(biglist, 1):
-        for node in level:
-            if len(node) > 0:
-                firstkey, firstval = node[0]
-                spiderdict[i, firstkey] = len(nodelist)
-
-            newnode = _Node()
+        # each element of groups will become a record:
+        # it is currently a list of node indices to point to
+        for g in groups:
+            newnode = _Node(ndType=0, ndNHeight=bthDepth)
+            for idx in g:
+                b = nodelist[idx].records[0]
+                b = b[:1+b[0]]
+                b = b'\x25' + b[1:]
+                b += bytes(b[0]+1-len(b))
+                b += struct.pack('>L', idx)
+                assert len(b) == 42
+                newnode.records.append(b)
             nodelist.append(newnode)
-            newnode.records = node
-            newnode.ndNHeight = i
 
-            if level is biglist[-1]:
-                newnode.ndType = 0xFF # leaf node
-            else:
-                newnode.ndType = 0 # index node
-
-    # for n in nodelist:
-    #     print(n.ndNHeight, n.records)
-    #     print()
-
-    # print(spiderdict)
-
-    # pack the records in the index and leaf nodes
-    for node in nodelist:
-        if node.ndType == 0xFF: # leaf node
-            node.records = [_pack_leaf_record(k, v) for (k, v) in node.records]
-        elif node.ndType == 0: # index node
-            node.records = [_pack_index_record(k, spiderdict[node.ndNHeight+1, k]) for (k, v) in node.records]
-
-    # make the map nodes so that the bitmap covers what we use
-    # (this does not yet populate the bitmap)
+    # Header node already has a 256-bit bitmap record (2048-bit)
+    # Add map nodes with 3952-bit bitmap recs to cover every node
     bits_covered = 2048
     mapnodes = []
-    while bits_covered < len(nodelist):
-        # print('making map node!')
-        bits_covered += 3952 # bits in a max-sized record
-        mapnode = _Node()
+    while bits_covered < len(nodelist): # THIS ID NUMBER IS WRONG!
+        mapnode = _Node(ndType=2, ndNHeight=1)
         nodelist.append(mapnode)
         mapnodes.append(mapnode)
-        mapnode.ndType = 2
-        ndNHeight = 1
+        mapnode.records = [bytes(3952//8)]
+        bits_covered += len(mapnode.records[0]) * 8
 
-    # now we run back and forth to join up nodes of similar type
+    # Populate the bitmap (1 = used)
+    headnode.records[2] = _bits(2048, len(nodelist))
+    for i, mnode in mapnodes:
+        nset = len(nodelist) - 2048 - i*3952
+        mnode.records = [_bits(3952, nset)]
+
+    # Run back and forth to join up one linked list for each type
     most_recent = {}
     for i, node in enumerate(nodelist):
         node.ndBLink = most_recent.get(node.ndType, 0)
@@ -189,32 +183,13 @@ def _mkbtree(records, bthKeyLen):
         most_recent[node.ndType] = i
     bthFNode = most_recent.get(0xFF, 0)
 
-    # for n in nodelist:
-    #     print(n.__dict__)
-
-    bthFree = len(nodelist) // 4 # maybe limber this up in the future
-    bthFree = 11 if bthKeyLen == 7 else 10 ## fix this later??
-
-    # populate the bitmap (1 = used)
-    hnode.records[2] = _bits(2048, len(nodelist))
-    for i, mnode in mapnodes:
-        nset = len(nodelist) - 2048 - i*3952
-        mnode.records = [_bits(3952, nset)]
-
-    # populate the header node:
-    bthDepth = len(biglist)
-    bthRoot = 1 if biglist else 0 # root node is first-but-one, or no node at all
-    # bthNRecs set above
-    # bthFNode/bthLNode also set above
+    # Populate the first (header) record of the header node
     bthNodeSize = 512
-    bthNNodes = len(nodelist) + bthFree # how do we calculate this?
-    # bthFree set above
-    hnode.records[0] = struct.pack('>HLLLLHHLL76x',
+    bthNNodes = len(nodelist); bthFree = 0
+    headnode.records[0] = struct.pack('>HLLLLHHLL76x',
         bthDepth, bthRoot, bthNRecs, bthFNode, bthLNode,
         bthNodeSize, bthKeyLen, bthNNodes, bthFree)
 
-    # last little hack: append free nodes to nodelist
-    nodelist.append(512 * bthFree) # these will become zeroes
     return b''.join(bytes(node) for node in nodelist)
 
 def _catrec_sorter(b):
