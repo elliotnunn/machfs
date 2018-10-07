@@ -22,7 +22,7 @@ def test_macos_mount():
     h.drVN = b'ElmoTest'
     hf = File()
     hf.data = b'12345' * 10
-    for i in range(100):
+    for i in reversed(range(100)):
         last = b'testfile-%03d' % i
         h[last] = hf
     ser = h.write(10*1024*1024)
@@ -32,7 +32,7 @@ def test_macos_mount():
     assert h2[b'testfile-000'].data == hf.data
 
     open('/tmp/SMALL.dmg','wb').write(ser)
-    os.system('open /tmp/SMALL.dmg')
+    os.system('hdiutil attach /tmp/SMALL.dmg')
     n = 10
     while 1:
         n += 1

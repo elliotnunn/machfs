@@ -106,13 +106,15 @@ class _Node:
 def _mkbtree(records, bthKeyLen):
     nodelist = [] # append to this as we go
 
-    index_step = 8 # pointers per index node; min=2, max=11
+    # pointers per index node, range 2-11
+    index_step = 8 # not really worth tuning
 
     # First node is always a header node, with three records:
     # header records, reserved record, bitmap record
     headnode = _Node(ndType=1, ndNHeight=0, records=['header placeholder', bytes(128), 'bitmap placeholder'])
     nodelist.append(headnode)
 
+    # Followed (in our implementation) by leaf nodes
     bthNRecs = 0
     bthRoot = 0
     bthDepth = 0
@@ -158,7 +160,7 @@ def _mkbtree(records, bthKeyLen):
     # Add map nodes with 3952-bit bitmap recs to cover every node
     bits_covered = 2048
     mapnodes = []
-    while bits_covered < len(nodelist): # THIS ID NUMBER IS WRONG!
+    while bits_covered < len(nodelist):
         mapnode = _Node(ndType=2, ndNHeight=1)
         nodelist.append(mapnode)
         mapnodes.append(mapnode)
