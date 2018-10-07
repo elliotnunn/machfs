@@ -53,6 +53,10 @@ class AbstractFolder(collections.MutableMapping):
     def __len__(self):
         return len(self._maindict)
 
+    def __repr__(self):
+        the_dict = {self._prefdict[k]: v for (k, v) in self._maindict.items()}
+        return repr(the_dict)
+
     def iter_paths(self):
         for name, child in self.items():
             print(name, child)

@@ -103,7 +103,16 @@ class Volume(_directory.AbstractFolder):
         self.bootblocks = bytes(1024)       # optional; for booting HFS volumes
         self.crdate = 0                     # date and time of volume creation
         self.lsmod = 0                      # date and time of last modification
-        self.name = b'Untitled'
+        self._name = b'Untitled'
+
+    @property
+    def name(self):
+        return self._name
+    @name.setter
+    def name(self, value):
+        if len(value) > 27:
+            raise ValueError('Max volume name length = 27')
+        self._name = value
 
     def read(self, from_volume):
         self._dirtree = {}
