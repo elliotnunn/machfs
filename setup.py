@@ -1,8 +1,8 @@
-from distutils.core import setup
+from setuptools import setup
 
 setup(
     name='machfs',
-    version='0.1dev',
+    version='0.4dev',
     author='Elliot Nunn',
     author_email='elliotnunn@me.com',
     description='Library for reading and writing Macintosh HFS volumes',
