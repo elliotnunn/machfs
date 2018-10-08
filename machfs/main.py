@@ -1,9 +1,6 @@
 import struct
 import collections
-
-import btree as _btree
-import bitmanip as _bitmanip
-import directory as _directory
+from . import btree, bitmanip, directory
 
 
 def _catalog_rec_sort(b):
@@ -67,7 +64,7 @@ class _TempWrapper:
         self.of = of
 
 
-class Folder(_directory.AbstractFolder):
+class Folder(directory.AbstractFolder):
     def __init__(self):
         super().__init__()
 
@@ -96,7 +93,7 @@ class File:
         return 'File %r/%r data=%db rsrc=%db' % (self.type, self.creator, len(self.data), len(self.rsrc))
 
 
-class Volume(_directory.AbstractFolder):
+class Volume(directory.AbstractFolder):
     def __init__(self):
         super().__init__()
 
@@ -133,10 +130,10 @@ class Volume(_directory.AbstractFolder):
 
         block2offset = lambda block: 512*drAlBlSt + drAlBlkSiz*block
         extent2bytes = lambda firstblk, blkcnt: from_volume[block2offset(firstblk):block2offset(firstblk+blkcnt)]
-        extrec2bytes = lambda extrec: b''.join(extent2bytes(a, b) for (a, b) in _btree.unpack_extent_record(extrec))
+        extrec2bytes = lambda extrec: b''.join(extent2bytes(a, b) for (a, b) in btree.unpack_extent_record(extrec))
 
         extoflow = {}
-        for rec in _btree.dump_btree(extrec2bytes(drXTExtRec)):
+        for rec in btree.dump_btree(extrec2bytes(drXTExtRec)):
             if rec[0] != 7: continue
             # print(key, val)
             pass
@@ -144,13 +141,13 @@ class Volume(_directory.AbstractFolder):
         cnids = {}
         childrenof = collections.defaultdict(dict)
 
-        for rec in _btree.dump_btree(extrec2bytes(drCTExtRec)):
+        for rec in btree.dump_btree(extrec2bytes(drCTExtRec)):
             # create a directory tree from the catalog file
             rec_len = rec[0]
             if rec_len == 0: continue
 
             key = rec[2:1+rec_len]
-            val = rec[_bitmanip.pad_up(1+rec_len, 2):]
+            val = rec[bitmanip.pad_up(1+rec_len, 2):]
 
             ckrParID, namelen = struct.unpack_from('>LB', key)
             ckrCName = key[5:5+namelen]
@@ -248,11 +245,11 @@ class Volume(_directory.AbstractFolder):
         blkaccum = []
 
         # <<< put the empty extents overflow file in here >>>
-        extoflowfile = _btree.make_btree([], bthKeyLen=7)
+        extoflowfile = btree.make_btree([], bthKeyLen=7)
         # also need to do some cleverness to ensure that this gets picked up...
         drXTFlSize = len(extoflowfile)
         drXTExtRec_Start = len(blkaccum)
-        blkaccum.extend(_bitmanip.chunkify(extoflowfile, drAlBlkSiz))
+        blkaccum.extend(bitmanip.chunkify(extoflowfile, drAlBlkSiz))
         drXTExtRec_Cnt = len(blkaccum) - drXTExtRec_Start
 
         # write all the files in the volume
@@ -276,11 +273,11 @@ class Volume(_directory.AbstractFolder):
                 wrap.dfrk = wrap.rfrk = (0, 0)
                 if obj.data:
                     pre = len(blkaccum)
-                    blkaccum.extend(_bitmanip.chunkify(obj.data, drAlBlkSiz))
+                    blkaccum.extend(bitmanip.chunkify(obj.data, drAlBlkSiz))
                     wrap.dfrk = (pre, len(blkaccum)-pre)
                 if obj.rsrc:
                     pre = len(blkaccum)
-                    blkaccum.extend(_bitmanip.chunkify(obj.rsrc, drAlBlkSiz))
+                    blkaccum.extend(bitmanip.chunkify(obj.rsrc, drAlBlkSiz))
                     wrap.rfrk = (pre, len(blkaccum)-pre)
 
         catalog = [] # (key, value) tuples
@@ -303,8 +300,8 @@ class Volume(_directory.AbstractFolder):
                 filTyp = 0
                 filUsrWds = struct.pack('>4s4sHHHxxxxxx', obj.type, obj.creator, obj.flags, obj.x, obj.y)
                 filFlNum = wrap.cnid
-                filStBlk, filLgLen, filPyLen = wrap.dfrk[0], len(obj.data), _bitmanip.pad_up(len(obj.data), drAlBlkSiz)
-                filRStBlk, filRLgLen, filRPyLen = wrap.rfrk[0], len(obj.rsrc), _bitmanip.pad_up(len(obj.rsrc), drAlBlkSiz)
+                filStBlk, filLgLen, filPyLen = wrap.dfrk[0], len(obj.data), bitmanip.pad_up(len(obj.data), drAlBlkSiz)
+                filRStBlk, filRLgLen, filRPyLen = wrap.rfrk[0], len(obj.rsrc), bitmanip.pad_up(len(obj.rsrc), drAlBlkSiz)
                 filCrDat, filMdDat, filBkDat = obj.crdat, obj.mddat, obj.bkdat
                 filFndrInfo = bytes(16) # todo must fix
                 filClpSize = 0 # todo must fix
@@ -348,18 +345,18 @@ class Volume(_directory.AbstractFolder):
 
         # now it is time to sort these records! fuck that shit...
         catalog.sort(key=_catalog_rec_sort)
-        catalogfile = _btree.make_btree(catalog, bthKeyLen=37)
+        catalogfile = btree.make_btree(catalog, bthKeyLen=37)
         # also need to do some cleverness to ensure that this gets picked up...
         drCTFlSize = len(catalogfile)
         drCTExtRec_Start = len(blkaccum)
-        blkaccum.extend(_bitmanip.chunkify(catalogfile, drAlBlkSiz))
+        blkaccum.extend(bitmanip.chunkify(catalogfile, drAlBlkSiz))
         drCTExtRec_Cnt = len(blkaccum) - drCTExtRec_Start
 
         if len(blkaccum) > drNmAlBlks:
             raise ValueError('Does not fit!')
 
         # Create the bitmap of free volume allocation blocks
-        bitmap = _bitmanip.bits(bitmap_blk_cnt * 512 * 8, len(blkaccum))
+        bitmap = bitmanip.bits(bitmap_blk_cnt * 512 * 8, len(blkaccum))
 
         # Create the Volume Information Block
         drSigWord = b'BD'

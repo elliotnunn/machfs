@@ -1,1 +1,1 @@
-from main import Volume, Folder, File
+from .main import *

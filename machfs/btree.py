@@ -1,6 +1,5 @@
 import struct
-
-import bitmanip as _bitmanip
+from . import bitmanip
 
 
 class _Node:
@@ -160,10 +159,10 @@ def make_btree(records, bthKeyLen):
         bits_covered += len(mapnode.records[0]) * 8
 
     # Populate the bitmap (1 = used)
-    headnode.records[2] = _bitmanip.bits(2048, len(nodelist))
+    headnode.records[2] = bitmanip.bits(2048, len(nodelist))
     for i, mnode in mapnodes:
         nset = len(nodelist) - 2048 - i*3952
-        mnode.records = [_bitmanip.bits(3952, nset)]
+        mnode.records = [bitmanip.bits(3952, nset)]
 
     # Run back and forth to join up one linked list for each type
     most_recent = {}
