@@ -125,8 +125,12 @@ class Volume(directory.AbstractFolder):
         extoflow = {}
         for rec in btree.dump_btree(extrec2bytes(drXTExtRec)):
             if rec[0] != 7: continue
-            # print(key, val)
-            pass
+            xkrFkType, xkrFNum, xkrFABN, extrec = struct.unpack_from('>xBLH12s', rec)
+            if xkrFkType == 0xFF:
+                fork = 'rsrc'
+            elif xkrFkType == 0:
+                fork = 'data'
+            extoflow[xkrFNum, fork, xkrFABN] = extrec
 
         cnids = {}
         childlist = [] # list of (parent_cnid, child_name, child_object) tuples
@@ -176,17 +180,12 @@ class Volume(directory.AbstractFolder):
                 f.type, f.creator, f.flags, f.x, f.y = struct.unpack_from('>4s4sHHH', filUsrWds)
 
                 for fork, length, extrec in [('data', filLgLen, filExtRec), ('rsrc', filRLgLen, filRExtRec)]:
-                    accum = bytearray()
-                    extrec = list(struct.unpack('>HHHHHH', extrec))
-                    extrec = list(zip(extrec[::2], extrec[1::2]))
-                    for extstart, extlength in extrec:
-                        if extlength == 0: continue
-                        astart = 512*drAlBlSt + drAlBlkSiz*extstart
-                        astop = astart + drAlBlkSiz*extlength
-                        accum.extend(from_volume[astart:astop])
+                    accum = bytearray(extrec2bytes(extrec))
+                    while len(accum) < length:
+                        next_blk = len(accum) // drAlBlkSiz
+                        next_extrec = extoflow[filFlNum, fork, next_blk]
+                        accum.extend(extrec2bytes(next_extrec))
                     del accum[length:] # logical length can be less than a number of blocks
-                    if len(accum) != length:
-                        raise ValueError('need to consult extents overflow file')
 
                     setattr(f, fork, accum)
 

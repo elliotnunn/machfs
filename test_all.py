@@ -51,6 +51,11 @@ def test_macos_mount():
     os.system('umount /Volumes/ElmoTest')
     assert recovered == hf.data
 
-    # h2 = Volume()
-    # h2.read(ser)
-    # assert h2['testfile-000'].data == hf.data
+    h2 = Volume()
+    h2.read(ser)
+    assert h2['testfile-000'].data == hf.data
+
+def test_extents_overflow():
+    h = Volume()
+    h.read(open('SourceForEmulator.dmg','rb').read())
+    assert h['aa'].data == b'a' * 278528
