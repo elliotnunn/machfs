@@ -3,6 +3,7 @@ def pad_up(size, factor):
     x = size + factor - 1
     return x - (x % factor)
 
+
 def bits(ntotal, nset):
     """Return a buffer of ntotal bits with the first nset set to 1"""
     assert ntotal % 8 == 0
@@ -24,6 +25,7 @@ def bits(ntotal, nset):
     accum.extend(b'\x00' * (final_len - len(accum)))
 
     return bytes(accum)
+
 
 def chunkify(b, blksize):
     for i in range(0, len(b), blksize):

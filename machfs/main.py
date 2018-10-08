@@ -50,6 +50,7 @@ def _catalog_rec_sort(b):
 
     return b[:4] + bytes(order[ch] for ch in b[5:])
 
+
 def _suggest_allocblk_size(volsize, minalign):
     min_nonalloc_blks = 6 # just for this estimation
     retval = minalign

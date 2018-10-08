@@ -51,6 +51,7 @@ def unpack_extent_record(record):
     if f: l.append((e, f))
     return l
 
+
 def _unpack_btree_node(buf, start):
     """Slice a btree node into records, including the 14-byte node descriptor"""
     ndFLink, ndBLink, ndType, ndNHeight, ndNRecs = struct.unpack_from('>LLBBH', buf, start)
@@ -59,6 +60,25 @@ def _unpack_btree_node(buf, start):
     stops = offsets[1:]
     records = [bytes(buf[start+i_start:start+i_stop]) for (i_start, i_stop) in zip(starts, stops)]
     return ndFLink, ndBLink, ndType, ndNHeight, records
+
+
+def _pack_leaf_record(key, value):
+    """Pack a key-value pair to go into a leaf node as a record"""
+    if len(value) & 1: value += b'\x00'
+    b = bytes([len(key)+1, 0, *key])
+    if len(b) & 1: b += bytes(1)
+    b += value
+    return b
+
+
+def _make_index_record(rec, pointer):
+    """Convert a key-value to a special key-pointer record"""
+    rec = rec[:1+rec[0]]
+    rec = b'\x25' + rec[1:]
+    rec += bytes(rec[0]+1-len(rec))
+    rec += struct.pack('>L', pointer)
+    return rec
+
 
 def dump_btree(buf):
     """Walk an HFS B*-tree, returning an iterator of (key, value) tuples."""
@@ -82,21 +102,6 @@ def dump_btree(buf):
             break
         this_leaf = ndFLink
 
-def _pack_leaf_record(key, value):
-    """Pack a key-value pair to go into a leaf node as a record"""
-    if len(value) & 1: value += b'\x00'
-    b = bytes([len(key)+1, 0, *key])
-    if len(b) & 1: b += bytes(1)
-    b += value
-    return b
-
-def _make_index_record(rec, pointer):
-    """Convert a key-value to a special key-pointer record"""
-    rec = rec[:1+rec[0]]
-    rec = b'\x25' + rec[1:]
-    rec += bytes(rec[0]+1-len(rec))
-    rec += struct.pack('>L', pointer)
-    return rec
 
 def make_btree(records, bthKeyLen):
     nodelist = [] # append to this as we go

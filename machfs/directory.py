@@ -4,7 +4,6 @@ import collections
 _CASE = list(range(256)) # cheating, fix this!
 
 
-
 def _to_lower(orig):
     return bytes(_CASE[x] for x in orig)
 
