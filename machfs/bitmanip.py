@@ -32,3 +32,8 @@ def chunkify(b, blksize):
         ab = b[i:i+blksize]
         if len(ab) < blksize: ab += bytes(blksize-len(ab))
         yield ab
+
+
+def pstring(orig):
+    macroman = orig.encode('mac_roman')
+    return bytes([len(macroman)]) + macroman

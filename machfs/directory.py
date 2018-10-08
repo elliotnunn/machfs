@@ -1,13 +1,6 @@
 import collections
 
 
-_CASE = list(range(256)) # cheating, fix this!
-
-
-def _to_lower(orig):
-    return bytes(_CASE[x] for x in orig)
-
-
 class AbstractFolder(collections.MutableMapping):
     def __init__(self, from_dict=()):
         self._prefdict = {} # lowercase to preferred
@@ -16,33 +9,35 @@ class AbstractFolder(collections.MutableMapping):
 
     def __setitem__(self, key, value):
         try:
-            key = key.encode('mac_roman')
+            key = key.decode('mac_roman')
         except AttributeError:
             pass
 
-        if len(key) > 31:
-            raise ValueError('Max filename length = 31')
+        key.encode('mac_roman')
 
-        lower = _to_lower(key)
+        if not (1 <= len(key) <= 31):
+            raise ValueError('Filename range 1-31 chars')
+
+        lower = key.lower()
         self._prefdict[lower] = key
         self._maindict[lower] = value
 
     def __getitem__(self, key):
         try:
-            key = key.encode('mac_roman')
+            key = key.decode('mac_roman')
         except AttributeError:
             pass
 
-        lower = _to_lower(key)
+        lower = key.lower()
         return self._maindict[lower]
 
     def __delitem__(self, key):
         try:
-            value = value.encode('mac_roman')
+            value = value.decode('mac_roman')
         except AttributeError:
             pass
 
-        lower = _to_lower(key)
+        lower = key.lower()
         del self._maindict[lower]
         del self._prefdict[lower]
 
@@ -58,7 +53,6 @@ class AbstractFolder(collections.MutableMapping):
 
     def iter_paths(self):
         for name, child in self.items():
-            print(name, child)
             yield ((name,), child)
             try:
                 childs_children = child.iter_paths()

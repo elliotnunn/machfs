@@ -1,5 +1,4 @@
 import struct
-import collections
 from . import btree, bitmanip, directory
 
 
@@ -101,19 +100,9 @@ class Volume(directory.AbstractFolder):
         self.bootblocks = bytes(1024)       # optional; for booting HFS volumes
         self.crdate = 0                     # date and time of volume creation
         self.lsmod = 0                      # date and time of last modification
-        self._name = b'Untitled'
-
-    @property
-    def name(self):
-        return self._name
-    @name.setter
-    def name(self, value):
-        if len(value) > 27:
-            raise ValueError('Max volume name length = 27')
-        self._name = value
+        self.name = 'Untitled'
 
     def read(self, from_volume):
-        self._dirtree = {}
         self.bootblocks = from_volume[:1024]
 
         drSigWord, drCrDate, drLsMod, drAtrb, drNmFls, \
@@ -127,7 +116,7 @@ class Volume(directory.AbstractFolder):
 
         self.crdate = drCrDate
         self.lsmod = drLsMod
-        self.name = drVN
+        self.name = drVN.decode('mac_roman')
 
         block2offset = lambda block: 512*drAlBlSt + drAlBlkSiz*block
         extent2bytes = lambda firstblk, blkcnt: from_volume[block2offset(firstblk):block2offset(firstblk+blkcnt)]
@@ -140,7 +129,7 @@ class Volume(directory.AbstractFolder):
             pass
 
         cnids = {}
-        childrenof = collections.defaultdict(dict)
+        childlist = [] # list of (parent_cnid, child_name, child_object) tuples
 
         for rec in btree.dump_btree(extrec2bytes(drCTExtRec)):
             # create a directory tree from the catalog file
@@ -156,9 +145,9 @@ class Volume(directory.AbstractFolder):
             datatype = (None, 'dir', 'file', 'dthread', 'fthread')[val[0]]
             datarec = val[2:]
 
-            print(datatype + '\t' + repr(key))
-            print('\t', datarec)
-            print()
+            # print(datatype + '\t' + repr(key))
+            # print('\t', datarec)
+            # print()
 
             if datatype == 'dir':
                 dirFlags, dirVal, dirDirID, dirCrDat, dirMdDat, dirBkDat, dirUsrInfo, dirFndrInfo \
@@ -166,7 +155,7 @@ class Volume(directory.AbstractFolder):
 
                 f = Folder()
                 cnids[dirDirID] = f
-                childrenof[ckrParID][ckrCName] = f
+                childlist.append((ckrParID, ckrCName, f))
 
                 f.crdat, f.mddat, f.bkdat = dirCrDat, dirMdDat, dirBkDat
 
@@ -181,7 +170,7 @@ class Volume(directory.AbstractFolder):
 
                 f = File()
                 cnids[filFlNum] = f
-                childrenof[ckrParID][ckrCName] = f
+                childlist.append((ckrParID, ckrCName, f))
 
                 f.crdat, f.mddat, f.bkdat = filCrDat, filMdDat, filBkDat
                 f.type, f.creator, f.flags, f.x, f.y = struct.unpack_from('>4s4sHHH', filUsrWds)
@@ -206,9 +195,10 @@ class Volume(directory.AbstractFolder):
             # elif datatype == 4:
             #     print('fil thread:', rec)
 
-        for parent, children in childrenof.items():
-            if parent != 1: # not the mythical parent of root!
-                cnids[parent].update(children)
+        for parent_cnid, child_name, child_obj in childlist:
+            if parent_cnid != 1:
+                parent_obj = cnids[parent_cnid]
+                parent_obj[child_name] = child_obj
 
         self.update(cnids[2])
 
@@ -290,8 +280,9 @@ class Volume(directory.AbstractFolder):
             if wrap.cnid == 1: continue
 
             obj = wrap.of
+            pstrname = bitmanip.pstring(path[-1])
 
-            mainrec_key = struct.pack('>LB', path2wrap[path[:-1]].cnid, len(path[-1])) + path[-1]
+            mainrec_key = struct.pack('>L', path2wrap[path[:-1]].cnid) + pstrname
 
             if isinstance(wrap.of, File):
                 drFilCnt += 1
@@ -339,7 +330,7 @@ class Volume(directory.AbstractFolder):
 
             thdrec_key = struct.pack('>Lx', wrap.cnid)
             thdrec_val_type = 4 if isinstance(wrap.of, File) else 3
-            thdrec_val = struct.pack('>BxxxxxxxxxLB', thdrec_val_type, path2wrap[path[:-1]].cnid, len(path[-1])) + path[-1]
+            thdrec_val = struct.pack('>BxxxxxxxxxL', thdrec_val_type, path2wrap[path[:-1]].cnid) + pstrname
 
             catalog.append((thdrec_key, thdrec_val))
 
@@ -371,12 +362,15 @@ class Volume(directory.AbstractFolder):
         drWrCnt = 0 # ????volume write count
         drVCSize = drVBMCSize = drCtlCSize = 0
         drAtrb = 1<<8                  # volume attributes (hwlock, swlock, CLEANUNMOUNT, badblocks)
-        drVN = self.name
+        drVN = self.name.encode('mac_roman')
         drVolBkUp = 0                  # date and time of last backup
         drVSeqNum = 0                  # volume backup sequence number
         drFndrInfo = bytes(32)         # information used by the Finder
         drCrDate = self.crdate
         drLsMod = self.lsmod
+
+        if not (1 <= len(drVN) <= 27):
+            raise ValueError('Volume name range 1-27 chars')
 
         vib = struct.pack('>2sLLHHHHHLLHLH28pLHLLLHLL32sHHHLHHxxxxxxxxLHHxxxxxxxx',
             drSigWord, drCrDate, drLsMod, drAtrb, drNmFls,
