@@ -90,7 +90,9 @@ class File:
         self.data = bytearray()
 
     def __str__(self):
-        return 'File %r/%r data=%db rsrc=%db' % (self.type, self.creator, len(self.data), len(self.rsrc))
+        typestr, creatorstr = (x.decode('mac_roman') for x in (self.type, self.creator))
+        dstr, rstr = (repr(bytes(x)) if 1 <= len(x) <= 32 else '%db' % len(x) for x in (self.data, self.rsrc))
+        return '[%s/%s] data=%s rsrc=%s' % (typestr, creatorstr, dstr, rstr)
 
 
 class Volume(directory.AbstractFolder):
