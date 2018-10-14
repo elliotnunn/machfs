@@ -135,6 +135,7 @@ class Volume(directory.AbstractFolder):
         cnids = {}
         childlist = [] # list of (parent_cnid, child_name, child_object) tuples
 
+        prev_key = None
         for rec in btree.dump_btree(extrec2bytes(drCTExtRec)):
             # create a directory tree from the catalog file
             rec_len = rec[0]
@@ -142,6 +143,11 @@ class Volume(directory.AbstractFolder):
 
             key = rec[2:1+rec_len]
             val = rec[bitmanip.pad_up(1+rec_len, 2):]
+
+            # if prev_key: # Uncomment this to test the sort order with 20% performance cost!
+            #     if _catalog_rec_sort((prev_key,)) >= _catalog_rec_sort((key,)):
+            #         raise ValueError('Sort error: %r, %r' % (prev_key, key))
+            # prev_key = key
 
             ckrParID, namelen = struct.unpack_from('>LB', key)
             ckrCName = key[5:5+namelen]
