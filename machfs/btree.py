@@ -183,14 +183,15 @@ def make_btree(records, bthKeyLen, blksize):
         most_recent[node.ndType] = i
     bthFNode = most_recent.get(0xFF, 0)
 
+    bthFree = bitmanip.pad_up(len(nodelist), nodemult) - len(nodelist)
+    bthNNodes = len(nodelist) + bthFree
+
     # Populate the first (header) record of the header node
     bthNodeSize = 512
-    bthNNodes = len(nodelist); bthFree = 0
     headnode.records[0] = struct.pack('>HLLLLHHLL76x',
         bthDepth, bthRoot, bthNRecs, bthFNode, bthLNode,
         bthNodeSize, bthKeyLen, bthNNodes, bthFree)
 
-    slop_nodes = bitmanip.pad_up(len(nodelist), nodemult) - len(nodelist)
-    nodelist.append(512 * slop_nodes)
+    nodelist.append(512 * bthFree)
 
     return b''.join(bytes(node) for node in nodelist)
