@@ -103,7 +103,9 @@ def dump_btree(buf):
         this_leaf = ndFLink
 
 
-def make_btree(records, bthKeyLen):
+def make_btree(records, bthKeyLen, blksize):
+    nodemult = blksize // 512
+
     nodelist = [] # append to this as we go
 
     # pointers per index node, range 2-11
@@ -156,7 +158,7 @@ def make_btree(records, bthKeyLen):
     # Add map nodes with 3952-bit bitmap recs to cover every node
     bits_covered = 2048
     mapnodes = []
-    while bits_covered < len(nodelist):
+    while bits_covered < bitmanip.pad_up(len(nodelist), nodemult):
         mapnode = _Node(ndType=2, ndNHeight=1)
         nodelist.append(mapnode)
         mapnodes.append(mapnode)
@@ -187,5 +189,8 @@ def make_btree(records, bthKeyLen):
     headnode.records[0] = struct.pack('>HLLLLHHLL76x',
         bthDepth, bthRoot, bthNRecs, bthFNode, bthLNode,
         bthNodeSize, bthKeyLen, bthNNodes, bthFree)
+
+    slop_nodes = bitmanip.pad_up(len(nodelist), nodemult) - len(nodelist)
+    nodelist.append(512 * slop_nodes)
 
     return b''.join(bytes(node) for node in nodelist)

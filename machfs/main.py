@@ -243,7 +243,7 @@ class Volume(directory.AbstractFolder):
         blkaccum = []
 
         # <<< put the empty extents overflow file in here >>>
-        extoflowfile = btree.make_btree([], bthKeyLen=7)
+        extoflowfile = btree.make_btree([], bthKeyLen=7, blksize=drAlBlkSiz)
         # also need to do some cleverness to ensure that this gets picked up...
         drXTFlSize = len(extoflowfile)
         drXTExtRec_Start = len(blkaccum)
@@ -344,7 +344,7 @@ class Volume(directory.AbstractFolder):
 
         # now it is time to sort these records! fuck that shit...
         catalog.sort(key=_catalog_rec_sort)
-        catalogfile = btree.make_btree(catalog, bthKeyLen=37)
+        catalogfile = btree.make_btree(catalog, bthKeyLen=37, blksize=drAlBlkSiz)
         # also need to do some cleverness to ensure that this gets picked up...
         drCTFlSize = len(catalogfile)
         drCTExtRec_Start = len(blkaccum)
