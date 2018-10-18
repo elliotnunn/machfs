@@ -58,6 +58,25 @@ def _suggest_allocblk_size(volsize, minalign):
     return retval
 
 
+def _get_every_extent(nblocks, firstrecord, cnid, xoflow, fork):
+    accum = 0
+    extlist = []
+
+    for a, b in btree.unpack_extent_record(firstrecord):
+        if not b: continue
+        accum += b
+        extlist.append((a, b))
+
+    while accum < nblocks:
+        nextrecord = xoflow[cnid, fork, accum]
+        for a, b in btree.unpack_extent_record(nextrecord):
+            if not b: continue
+            accum += b
+            extlist.append((a, b))
+
+    return extlist
+
+
 class _TempWrapper:
     """Volume uses this to store metadata while serialising"""
     def __init__(self, of):
@@ -121,11 +140,11 @@ class Volume(directory.AbstractFolder):
         self.name = drVN.decode('mac_roman')
 
         block2offset = lambda block: 512*drAlBlSt + drAlBlkSiz*block
-        extent2bytes = lambda firstblk, blkcnt: from_volume[block2offset(firstblk):block2offset(firstblk+blkcnt)]
-        extrec2bytes = lambda extrec: b''.join(extent2bytes(a, b) for (a, b) in btree.unpack_extent_record(extrec))
+        getextents = lambda extents: b''.join(from_volume[block2offset(firstblk):block2offset(firstblk+blkcnt)] for (firstblk, blkcnt) in extents)
+        getfork = lambda size, extrec1, cnid, fork: getextents(_get_every_extent((size+drAlBlkSiz-1)//drAlBlkSiz, extrec1, cnid, extoflow, fork))[:size]
 
         extoflow = {}
-        for rec in btree.dump_btree(extrec2bytes(drXTExtRec)):
+        for rec in btree.dump_btree(getfork(drXTFlSize, drXTExtRec, 3, 'data')):
             if rec[0] != 7: continue
             xkrFkType, xkrFNum, xkrFABN, extrec = struct.unpack_from('>xBLH12s', rec)
             if xkrFkType == 0xFF:
@@ -138,7 +157,7 @@ class Volume(directory.AbstractFolder):
         childlist = [] # list of (parent_cnid, child_name, child_object) tuples
 
         prev_key = None
-        for rec in btree.dump_btree(extrec2bytes(drCTExtRec)):
+        for rec in btree.dump_btree(getfork(drCTFlSize, drCTExtRec, 4, 'data')):
             # create a directory tree from the catalog file
             rec_len = rec[0]
             if rec_len == 0: continue
@@ -187,15 +206,8 @@ class Volume(directory.AbstractFolder):
                 f.crdat, f.mddat, f.bkdat = filCrDat, filMdDat, filBkDat
                 f.type, f.creator, f.flags, f.x, f.y = struct.unpack_from('>4s4sHHH', filUsrWds)
 
-                for fork, length, extrec in [('data', filLgLen, filExtRec), ('rsrc', filRLgLen, filRExtRec)]:
-                    accum = bytearray(extrec2bytes(extrec))
-                    while len(accum) < length:
-                        next_blk = len(accum) // drAlBlkSiz
-                        next_extrec = extoflow[filFlNum, fork, next_blk]
-                        accum.extend(extrec2bytes(next_extrec))
-                    del accum[length:] # logical length can be less than a number of blocks
-
-                    setattr(f, fork, accum)
+                f.data = getfork(filLgLen, filExtRec, filFlNum, 'data')
+                f.rsrc = getfork(filRLgLen, filRExtRec, filFlNum, 'rsrc')
 
             # elif datatype == 3:
             #     print('dir thread:', rec)
