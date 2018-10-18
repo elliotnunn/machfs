@@ -33,7 +33,7 @@ class AbstractFolder(collections.MutableMapping):
 
     def __delitem__(self, key):
         try:
-            value = value.decode('mac_roman')
+            key = key.decode('mac_roman')
         except AttributeError:
             pass
 
