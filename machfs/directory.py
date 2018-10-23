@@ -15,9 +15,6 @@ class AbstractFolder(collections.MutableMapping):
 
         key.encode('mac_roman')
 
-        if not (1 <= len(key) <= 31):
-            raise ValueError('%r: Filename range 1-31 chars' % key)
-
         lower = key.lower()
         self._prefdict[lower] = key
         self._maindict[lower] = value

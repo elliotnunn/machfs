@@ -35,5 +35,4 @@ def chunkify(b, blksize):
 
 
 def pstring(orig):
-    macroman = orig.encode('mac_roman')
-    return bytes([len(macroman)]) + macroman
+    return bytes([len(orig)]) + orig

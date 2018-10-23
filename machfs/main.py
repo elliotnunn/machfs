@@ -78,10 +78,34 @@ def _get_every_extent(nblocks, firstrecord, cnid, xoflow, fork):
     return extlist
 
 
+def _encode_name(name, is_vol_name=False):
+    longest = 27 if is_vol_name else 31
+
+    try:
+        encoded = name.encode('mac_roman')
+    except UnicodeEncodeError:
+        raise BadNameError(name)
+    except AttributeError:
+        pass
+
+    if not 1 <= len(encoded) <= longest or b':' in encoded:
+        raise BadNameError(name)
+
+    return encoded
+
+
 class _TempWrapper:
     """Volume uses this to store metadata while serialising"""
     def __init__(self, of):
         self.of = of
+
+
+class OutOfSpaceError(Exception):
+    pass
+
+
+class BadNameError(Exception):
+    pass
 
 
 class Folder(directory.AbstractFolder):
@@ -226,6 +250,8 @@ class Volume(directory.AbstractFolder):
         if size < 400 * 1024 or size % 512:
             raise ValueError('size must be a multiple of 512b and >= 800K')
 
+        drVN = _encode_name(self.name, is_vol_name=True)
+
         # overall layout:
         #   1. two boot blocks (offset=0)
         #   2. one volume control block (offset=2)
@@ -252,12 +278,17 @@ class Volume(directory.AbstractFolder):
         drNmAlBlks = (size - (5+bitmap_blk_cnt)*512) // drAlBlkSiz
         blkaccum = []
 
+        def accumulate(x):
+            blkaccum.extend(x)
+            if len(blkaccum) > drNmAlBlks:
+                raise OutOfSpaceError
+
         # <<< put the empty extents overflow file in here >>>
         extoflowfile = btree.make_btree([], bthKeyLen=7, blksize=drAlBlkSiz)
         # also need to do some cleverness to ensure that this gets picked up...
         drXTFlSize = len(extoflowfile)
         drXTExtRec_Start = len(blkaccum)
-        blkaccum.extend(bitmanip.chunkify(extoflowfile, drAlBlkSiz))
+        accumulate(bitmanip.chunkify(extoflowfile, drAlBlkSiz))
         drXTExtRec_Cnt = len(blkaccum) - drXTExtRec_Start
 
         # write all the files in the volume
@@ -300,11 +331,11 @@ class Volume(directory.AbstractFolder):
                 wrap.dfrk = wrap.rfrk = (0, 0)
                 if obj.data:
                     pre = len(blkaccum)
-                    blkaccum.extend(bitmanip.chunkify(obj.data, drAlBlkSiz))
+                    accumulate(bitmanip.chunkify(obj.data, drAlBlkSiz))
                     wrap.dfrk = (pre, len(blkaccum)-pre)
                 if obj.rsrc:
                     pre = len(blkaccum)
-                    blkaccum.extend(bitmanip.chunkify(obj.rsrc, drAlBlkSiz))
+                    accumulate(bitmanip.chunkify(obj.rsrc, drAlBlkSiz))
                     wrap.rfrk = (pre, len(blkaccum)-pre)
 
         self._prefdict = root_dict_backup
@@ -318,7 +349,7 @@ class Volume(directory.AbstractFolder):
             if wrap.cnid == 1: continue
 
             obj = wrap.of
-            pstrname = bitmanip.pstring(path[-1])
+            pstrname = bitmanip.pstring(_encode_name(path[-1]))
 
             mainrec_key = struct.pack('>L', path2wrap[path[:-1]].cnid) + pstrname
 
@@ -379,7 +410,7 @@ class Volume(directory.AbstractFolder):
         # also need to do some cleverness to ensure that this gets picked up...
         drCTFlSize = len(catalogfile)
         drCTExtRec_Start = len(blkaccum)
-        blkaccum.extend(bitmanip.chunkify(catalogfile, drAlBlkSiz))
+        accumulate(bitmanip.chunkify(catalogfile, drAlBlkSiz))
         drCTExtRec_Cnt = len(blkaccum) - drCTExtRec_Start
 
         if len(blkaccum) > drNmAlBlks:
@@ -400,14 +431,10 @@ class Volume(directory.AbstractFolder):
         drWrCnt = 0 # ????volume write count
         drVCSize = drVBMCSize = drCtlCSize = 0
         drAtrb = 1<<8                  # volume attributes (hwlock, swlock, CLEANUNMOUNT, badblocks)
-        drVN = self.name.encode('mac_roman')
         drVolBkUp = 0                  # date and time of last backup
         drVSeqNum = 0                  # volume backup sequence number
         drFndrInfo = bytes(32)         # information used by the Finder
         drCrDate, drLsMod, drVolBkUp = self.crdate, self.mddate, self.bkdate
-
-        if not (1 <= len(drVN) <= 27):
-            raise ValueError('Volume name range 1-27 chars')
 
         vib = struct.pack('>2sLLHHHHHLLHLH28pLHLLLHLL32sHHHLHHxxxxxxxxLHHxxxxxxxx',
             drSigWord, drCrDate, drLsMod, drAtrb, drNmFls,
