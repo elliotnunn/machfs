@@ -18,4 +18,5 @@ setup(
         'Development Status :: 3 - Alpha',
     ],
     packages=['machfs'],
+    install_requires=['macresources'],
 )

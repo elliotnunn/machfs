@@ -1,4 +1,5 @@
 import struct
+from macresources import Resource, make_file
 from . import btree, bitmanip, directory
 
 
@@ -218,7 +219,7 @@ class Volume(directory.AbstractFolder):
 
         self.update(cnids[2])
 
-    def write(self, size=800*1024, align=512):
+    def write(self, size=800*1024, align=512, desktopdb=True):
         if align < 512 or align % 512:
             raise ValueError('align must be multiple of 512')
 
@@ -267,6 +268,25 @@ class Volume(directory.AbstractFolder):
         godwrap = _TempWrapper(None)
         godwrap.cnid = 1
 
+        root_dict_backup = self._prefdict
+        if desktopdb:
+            self._prefdict = dict(self._prefdict)
+            f = File()
+            f.type, f.creator = b'FNDR', b'ERIK'
+            f.flags = 0x4000 # invisible
+            f.rsrc = make_file([Resource(b'STR ', 0, data=b'\x0AFinder 1.0')])
+            self['Desktop'] = f
+            if size >= 2*1024*1024:
+                f = File()
+                f.type, f.creator = b'BTFL', b'DMGR'
+                f.flags = 0x4000
+                f.data = btree.make_btree([], bthKeyLen=37, blksize=drAlBlkSiz)
+                self['Desktop DB'] = f
+                f = File()
+                f.type, f.creator = b'DTFL', b'DMGR'
+                f.flags = 0x4000
+                self['Desktop DF'] = f
+
         path2wrap = {(): godwrap, (self.name,): topwrap}
         drNxtCNID = 16
         for path, obj in self.iter_paths():
@@ -286,6 +306,8 @@ class Volume(directory.AbstractFolder):
                     pre = len(blkaccum)
                     blkaccum.extend(bitmanip.chunkify(obj.rsrc, drAlBlkSiz))
                     wrap.rfrk = (pre, len(blkaccum)-pre)
+
+        self._prefdict = root_dict_backup
 
         catalog = [] # (key, value) tuples
 
