@@ -1,0 +1,7 @@
+MANIFEST
+dist/
+build/
+*.dmg
+*egg-info/
+__pycache__/
+.DS_Store
