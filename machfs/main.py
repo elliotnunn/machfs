@@ -91,7 +91,7 @@ class Folder(directory.AbstractFolder):
         self.x = 0 # where to put this spatially?
         self.y = 0
 
-        self.crdat = self.mddat = self.bkdat = 0
+        self.crdate = self.mddate = self.bkdate = 0
 
 
 class File:
@@ -103,7 +103,7 @@ class File:
         self.y = 0
 
         self.locked = False
-        self.crdat = self.mddat = self.bkdat = 0
+        self.crdate = self.mddate = self.bkdate = 0
 
         self.rsrc = bytearray()
         self.data = bytearray()
@@ -119,8 +119,7 @@ class Volume(directory.AbstractFolder):
         super().__init__()
 
         self.bootblocks = bytes(1024)       # optional; for booting HFS volumes
-        self.crdate = 0                     # date and time of volume creation
-        self.lsmod = 0                      # date and time of last modification
+        self.crdate = self.mddate = self.bkdate = 0
         self.name = 'Untitled'
 
     def read(self, from_volume):
@@ -135,9 +134,7 @@ class Volume(directory.AbstractFolder):
         drCTFlSize, drCTExtRec, \
         = struct.unpack_from('>2sLLHHHHHLLHLH28pLHLLLHLL32sHHHL12sL12s', from_volume, 1024)
 
-        self.crdate = drCrDate
-        self.lsmod = drLsMod
-        self.name = drVN.decode('mac_roman')
+        self.crdate, self.mddate, self.bkdate = drCrDate, drLsMod, drVolBkUp
 
         block2offset = lambda block: 512*drAlBlSt + drAlBlkSiz*block
         getextents = lambda extents: b''.join(from_volume[block2offset(firstblk):block2offset(firstblk+blkcnt)] for (firstblk, blkcnt) in extents)
@@ -188,7 +185,7 @@ class Volume(directory.AbstractFolder):
                 cnids[dirDirID] = f
                 childlist.append((ckrParID, ckrCName, f))
 
-                f.crdat, f.mddat, f.bkdat = dirCrDat, dirMdDat, dirBkDat
+                f.crdate, f.mddate, f.bkdate = dirCrDat, dirMdDat, dirBkDat
 
             elif datatype == 'file':
                 filFlags, filTyp, filUsrWds, filFlNum, \
@@ -203,7 +200,7 @@ class Volume(directory.AbstractFolder):
                 cnids[filFlNum] = f
                 childlist.append((ckrParID, ckrCName, f))
 
-                f.crdat, f.mddat, f.bkdat = filCrDat, filMdDat, filBkDat
+                f.crdate, f.mddate, f.bkdate = filCrDat, filMdDat, filBkDat
                 f.type, f.creator, f.flags, f.x, f.y = struct.unpack_from('>4s4sHHH', filUsrWds)
 
                 f.data = getfork(filLgLen, filExtRec, filFlNum, 'data')
@@ -313,7 +310,7 @@ class Volume(directory.AbstractFolder):
                 filFlNum = wrap.cnid
                 filStBlk, filLgLen, filPyLen = wrap.dfrk[0], len(obj.data), bitmanip.pad_up(len(obj.data), drAlBlkSiz)
                 filRStBlk, filRLgLen, filRPyLen = wrap.rfrk[0], len(obj.rsrc), bitmanip.pad_up(len(obj.rsrc), drAlBlkSiz)
-                filCrDat, filMdDat, filBkDat = obj.crdat, obj.mddat, obj.bkdat
+                filCrDat, filMdDat, filBkDat = obj.crdate, obj.mddate, obj.bkdate
                 filFndrInfo = bytes(16) # todo must fix
                 filClpSize = 0 # todo must fix
                 filExtRec = struct.pack('>HHHHHH', *wrap.dfrk, 0, 0, 0, 0)
@@ -336,7 +333,7 @@ class Volume(directory.AbstractFolder):
                 dirFlags = 0 # must fix
                 dirVal = len(wrap.of)
                 dirDirID = wrap.cnid
-                dirCrDat, dirMdDat, dirBkDat = (0,0,0) if obj is self else (obj.crdat, obj.mddat, obj.bkdat)
+                dirCrDat, dirMdDat, dirBkDat = obj.crdate, obj.mddate, obj.bkdate
                 dirUsrInfo = bytes(16)
                 dirFndrInfo = bytes(16)
                 mainrec_val = struct.pack('>BxHHLLLL16s16sxxxxxxxxxxxxxxxx',
@@ -385,8 +382,7 @@ class Volume(directory.AbstractFolder):
         drVolBkUp = 0                  # date and time of last backup
         drVSeqNum = 0                  # volume backup sequence number
         drFndrInfo = bytes(32)         # information used by the Finder
-        drCrDate = self.crdate
-        drLsMod = self.lsmod
+        drCrDate, drLsMod, drVolBkUp = self.crdate, self.mddate, self.bkdate
 
         if not (1 <= len(drVN) <= 27):
             raise ValueError('Volume name range 1-27 chars')
