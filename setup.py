@@ -19,4 +19,5 @@ setup(
     ],
     packages=['machfs'],
     install_requires=['macresources'],
+    scripts=['bin/MakeHFS', 'bin/DumpHFS'],
 )

@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+
+import argparse
+import os
+import os.path as path
+import re
+from datetime import datetime
+from machfs import Volume, Folder, File
+import macresources
+
+########################################################################
+
+def hfsdat(x):
+    if x.lower() == 'now':
+        x = datetime.now().isoformat()
+
+    if len(x) == 8 and all(c in '0123456789ABCDEF' for c in x.upper()):
+        try:
+            return int(x, base=16)
+        except ValueError:
+            pass
+
+    epoch = '19040101000000' # ISO8601 with the non-numerics stripped
+
+    # strip non-numerics and pad out using the epoch (cheeky)
+    stripped = ''.join(c for c in x if c in '0123456789')
+    stripped = stripped[:len(epoch)] + epoch[len(stripped):]
+
+    tformat = '%Y%m%d%H%M%S'
+
+    delta = datetime.strptime(stripped, tformat) - datetime.strptime(epoch, tformat)
+    delta = int(delta.total_seconds())
+
+    if not 0 <= delta <= 0xFFFFFFFF:
+        print('Warning: moving %r into the legacy MacOS date range (1904-2040)' % x)
+
+    delta = min(delta, 0xFFFFFFFF)
+    delta = max(delta, 0)
+
+    return delta
+
+def imgsize(x):
+    x = x.upper()
+    x = x.replace('B', '').replace('I', '')
+    if x.endswith('K'):
+        factor = 1024
+    elif x.endswith('M'):
+        factor = 1024*1024
+    elif x.endswith('G'):
+        factor = 1024*1024*1024
+    else:
+        factor = 1
+        x += 'b'
+    return int(x[:-1]) * factor
+
+args = argparse.ArgumentParser()
+
+args.add_argument('dest', metavar='OUTPUT', nargs=1, help='Destination file')
+args.add_argument('-n', '--name', default='untitled', action='store', help='volume name (default: untitled)')
+args.add_argument('-i', '--dir', action='store', help='folder to copy into the image')
+args.add_argument('-s', '--size', default='800k', type=imgsize, action='store', help='volume size (default: size of OUTPUT)')
+args.add_argument('-d', '--date', default='1994', type=hfsdat, action='store', help='creation & mod date (ISO-8601 or "now")')
+args.add_argument('--mpw-dates', action='store_true', help='''
+    preserve the modification order of files by setting on-disk dates
+    that differ by 1-minute increments, so that MPW Make can decide
+    which files to rebuild
+''')
+
+args = args.parse_args()
+
+########################################################################
+
+vol = Volume()
+vol.name = args.name
+vol.crdate = vol.mddate = vol.bkdate = args.date
+
+########################################################################
+
+def includefilter(n):
+    if n.startswith('.'): return False
+    if n.endswith('.rdump'): return True
+    if n.endswith('.idump'): return True
+    return True
+
+def swapsep(n):
+    return n.replace(':', path.sep)
+
+def mkbasename(n):
+    base, ext = path.splitext(n)
+    if ext in ('.rdump', '.idump'):
+        return base
+    else:
+        return n
+
+if args.dir is not None:
+    tmptree = {args.dir: vol}
+
+    for dirpath, dirnames, filenames in os.walk(args.dir):
+        dirnames[:] = [swapsep(x) for x in dirnames if includefilter(x)]
+        filenames[:] = [swapsep(x) for x in filenames if includefilter(x)]
+
+        for dn in dirnames:
+            newdir = Folder()
+            newdir.crdate = newdir.mddate = newdir.bkdate = args.date
+            tmptree[dirpath][dn] = newdir
+            tmptree[path.join(dirpath, dn)] = newdir
+
+        for fn in filenames:
+            basename = mkbasename(fn)
+            fullbase = path.join(dirpath, basename)
+            fullpath = path.join(dirpath, fn)
+
+            try:
+                thefile = tmptree[fullbase]
+            except KeyError:
+                thefile = File()
+                thefile.real_t = 0 # for the MPW hack
+                thefile.crdate = thefile.mddate = thefile.bkdate = args.date
+                thefile.contributors = []
+                tmptree[fullbase] = thefile
+
+            if fn.endswith('.idump'):
+                with open(fullpath, 'rb') as f:
+                    thefile.type = f.read(4)
+                    thefile.creator = f.read(4)
+            elif fn.endswith('rdump'):
+                rez = open(fullpath, 'rb').read()
+                resources = macresources.parse_rez_code(rez)
+                resfork = macresources.make_file(resources, align=4)
+                thefile.rsrc = resfork
+            else:
+                thefile.data = open(fullpath, 'rb').read()
+
+            thefile.contributors.append(fullpath)
+            if args.mpw_dates:
+                thefile.real_t = max(thefile.real_t, path.getmtime(fullpath))
+
+            tmptree[dirpath][basename] = thefile
+
+    for pathtpl, obj in vol.iter_paths():
+        try:
+            if obj.type == b'TEXT':
+                obj.data = obj.data.decode('utf8').replace('\r\n', '\r').replace('\n', '\r').encode('mac_roman')
+        except AttributeError:
+            pass
+
+########################################################################
+
+if args.mpw_dates:
+    all_real_times = set()
+    for pathtpl, obj in vol.iter_paths():
+        try:
+            all_real_times.add(obj.real_t)
+        except AttributeError:
+            pass
+    ts2idx = {ts: idx for (idx, ts) in enumerate(sorted(set(all_real_times)))}
+
+    for pathtpl, obj in vol.iter_paths():
+        try:
+            real_t = obj.real_t
+        except AttributeError:
+            pass
+        else:
+            fake_t = obj.crdate + 60 * ts2idx[real_t]
+            obj.crdate = obj.mddate = obj.bkdate = fake_t
+
+########################################################################
+
+image = vol.write(args.size)
+with open(args.dest[0], 'wb') as f:
+    f.write(image)
