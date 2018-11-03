@@ -243,6 +243,10 @@ class Volume(directory.AbstractFolder):
 
         self.update(cnids[2])
 
+        self.pop('Desktop', None)
+        self.pop('Desktop DB', None)
+        self.pop('Desktop DF', None)
+
     def write(self, size=800*1024, align=512, desktopdb=True):
         if align < 512 or align % 512:
             raise ValueError('align must be multiple of 512')
