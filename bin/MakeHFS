@@ -53,11 +53,15 @@ def imgsize(x):
         x += 'b'
     return int(x[:-1]) * factor
 
+def hfspathtpl(s):
+    return tuple(c for c in s.split(':') if c)
+
 args = argparse.ArgumentParser()
 
 args.add_argument('dest', metavar='OUTPUT', nargs=1, help='Destination file')
 args.add_argument('-n', '--name', default='untitled', action='store', help='volume name (default: untitled)')
 args.add_argument('-i', '--dir', action='store', help='folder to copy into the image')
+args.add_argument('-a', '--app', default=None, type=hfspathtpl, help='Path:To:Startup:App')
 args.add_argument('-s', '--size', default='800k', type=imgsize, action='store', help='volume size (default: size of OUTPUT)')
 args.add_argument('-d', '--date', default='1994', type=hfsdat, action='store', help='creation & mod date (ISO-8601 or "now")')
 args.add_argument('--mpw-dates', action='store_true', help='''
@@ -166,6 +170,6 @@ if args.mpw_dates:
 
 ########################################################################
 
-image = vol.write(args.size)
+image = vol.write(args.size, startapp=args.app)
 with open(args.dest[0], 'wb') as f:
     f.write(image)

@@ -244,7 +244,7 @@ class Volume(directory.AbstractFolder):
         self.pop('Desktop DB', None)
         self.pop('Desktop DF', None)
 
-    def write(self, size=800*1024, align=512, desktopdb=True, bootable=True):
+    def write(self, size=800*1024, align=512, desktopdb=True, bootable=True, startapp=None):
         if align < 512 or align % 512:
             raise ValueError('align must be multiple of 512')
 
@@ -331,6 +331,10 @@ class Volume(directory.AbstractFolder):
             if isinstance(obj, File) and (obj.type, obj.creator) == (b'ZSYS', b'MACS'):
                 systemfolder = path2wrap[path[:-1]].cnid
                 systemfile = wrap
+
+            if isinstance(obj, File) and path[1:] == tuple(startapp):
+                startfolder = path2wrap[path[:-1]].cnid
+                startname = path[-1]
 
             if isinstance(obj, File):
                 wrap.dfrk = wrap.rfrk = (0, 0)
@@ -434,6 +438,15 @@ class Volume(directory.AbstractFolder):
         except:
             bootblocks = bytes(1024)
             systemfolder = 0
+        bootblocks = bytearray(bootblocks)
+
+        # Set the startup app
+        try:
+            if not systemfolder: raise ValueError
+            apname = bitmanip.pstring(_encode_name(startname))
+            bootblocks[0x5A:0x5A+len(apname)] = apname
+        except:
+            startfolder = 0
 
         # Create the Volume Information Block
         drSigWord = b'BD'
@@ -449,7 +462,7 @@ class Volume(directory.AbstractFolder):
         drAtrb = 1<<8                  # volume attributes (hwlock, swlock, CLEANUNMOUNT, badblocks)
         drVolBkUp = 0                  # date and time of last backup
         drVSeqNum = 0                  # volume backup sequence number
-        drFndrInfo = struct.pack('>L28x', systemfolder)
+        drFndrInfo = struct.pack('>LLL28x', systemfolder, startfolder, startfolder)
         drCrDate, drLsMod, drVolBkUp = self.crdate, self.mddate, self.bkdate
 
         vib = struct.pack('>2sLLHHHHHLLHLH28pLHLLLHLL32sHHHLHHxxxxxxxxLHHxxxxxxxx',
