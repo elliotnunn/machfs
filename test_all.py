@@ -55,7 +55,19 @@ def test_macos_mount():
     h2.read(ser)
     assert h2['testfile-000'].data == hf.data
 
-def test_extents_overflow():
-    h = Volume()
-    h.read(open('SourceForEmulator.dmg','rb').read())
-    assert h['aa'].data == b'a' * 278528
+# def test_extents_overflow():
+#     h = Volume()
+#     h.read(open('SourceForEmulator.dmg','rb').read())
+#     assert h['aa'].data == b'a' * 278528
+
+def test_many_sizes():
+    sizes = [800*1024, 1024*1024]
+    while sizes[-1] < 4*1024*1024*1024:
+        sizes.append(sizes[-1] * 2)
+
+    # okay, we have heaps of sizes
+    v = Volume()
+    v.name = 'ImportantTestVol'
+    for s in sizes:
+        ser = v.write(s-512)
+        open('/tmp/SMALL-%X.dmg'%s, 'wb').write(ser)
