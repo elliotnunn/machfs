@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='machfs',
-    version='0.4dev',
+    version='1.0',
     author='Elliot Nunn',
     author_email='elliotnunn@me.com',
     description='Library for reading and writing Macintosh HFS volumes',
@@ -15,7 +15,6 @@ setup(
         'Operating System :: OS Independent',
         'License :: OSI Approved :: MIT License',
         'Topic :: System :: Filesystems',
-        'Development Status :: 3 - Alpha',
     ],
     packages=['machfs'],
     install_requires=['macresources'],
