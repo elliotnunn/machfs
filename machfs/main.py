@@ -1,5 +1,5 @@
 import struct
-from macresources import Resource, make_file
+from macresources import Resource, make_file, parse_file
 from . import btree, bitmanip, directory
 
 
@@ -143,13 +143,10 @@ class Volume(directory.AbstractFolder):
     def __init__(self):
         super().__init__()
 
-        self.bootblocks = bytes(1024)       # optional; for booting HFS volumes
         self.crdate = self.mddate = self.bkdate = 0
         self.name = 'Untitled'
 
     def read(self, from_volume):
-        self.bootblocks = from_volume[:1024]
-
         drSigWord, drCrDate, drLsMod, drAtrb, drNmFls, \
         drVBMSt, drAllocPtr, drNmAlBlks, drAlBlkSiz, drClpSiz, drAlBlSt, \
         drNxtCNID, drFreeBks, drVN, drVolBkUp, drVSeqNum, \
@@ -247,7 +244,7 @@ class Volume(directory.AbstractFolder):
         self.pop('Desktop DB', None)
         self.pop('Desktop DF', None)
 
-    def write(self, size=800*1024, align=512, desktopdb=True):
+    def write(self, size=800*1024, align=512, desktopdb=True, bootable=True):
         if align < 512 or align % 512:
             raise ValueError('align must be multiple of 512')
 
@@ -330,6 +327,10 @@ class Volume(directory.AbstractFolder):
             path2wrap[path] = wrap
             wrap.path = path
             wrap.cnid = drNxtCNID; drNxtCNID += 1
+
+            if isinstance(obj, File) and (obj.type, obj.creator) == (b'ZSYS', b'MACS'):
+                systemfolder = path2wrap[path[:-1]].cnid
+                systemfile = wrap
 
             if isinstance(obj, File):
                 wrap.dfrk = wrap.rfrk = (0, 0)
@@ -423,6 +424,17 @@ class Volume(directory.AbstractFolder):
         # Create the bitmap of free volume allocation blocks
         bitmap = bitmanip.bits(bitmap_blk_cnt * 512 * 8, len(blkaccum))
 
+        # Create the boot blocks
+        try:
+            if bootable:
+                sysresources = parse_file(systemfile.of.rsrc)
+                boot1 = next(r for r in sysresources if (r.type, r.id) == (b'boot', 1))
+                bootblocks = boot1.data
+                if len(bootblocks) != 1024: raise ValueError
+        except:
+            bootblocks = bytes(1024)
+            systemfolder = 0
+
         # Create the Volume Information Block
         drSigWord = b'BD'
         drNmFls = sum(isinstance(x, File) for x in self.values())
@@ -437,7 +449,7 @@ class Volume(directory.AbstractFolder):
         drAtrb = 1<<8                  # volume attributes (hwlock, swlock, CLEANUNMOUNT, badblocks)
         drVolBkUp = 0                  # date and time of last backup
         drVSeqNum = 0                  # volume backup sequence number
-        drFndrInfo = bytes(32)         # information used by the Finder
+        drFndrInfo = struct.pack('>L28x', systemfolder)
         drCrDate, drLsMod, drVolBkUp = self.crdate, self.mddate, self.bkdate
 
         vib = struct.pack('>2sLLHHHHHLLHLH28pLHLLLHLL32sHHHLHHxxxxxxxxLHHxxxxxxxx',
@@ -452,7 +464,7 @@ class Volume(directory.AbstractFolder):
         vib += bytes(512-len(vib))
 
         assert all(len(x) == drAlBlkSiz for x in blkaccum)
-        finalchunks = [self.bootblocks, vib, bitmap, *blkaccum]
+        finalchunks = [bootblocks, vib, bitmap, *blkaccum]
         finalchunks.append(bytes(size - sum(len(x) for x in finalchunks) - 2*512))
         finalchunks.append(vib)
         finalchunks.append(bytes(512))
