@@ -78,8 +78,8 @@ def _get_every_extent(nblocks, firstrecord, cnid, xoflow, fork):
     return extlist
 
 
-def _encode_name(name, is_vol_name=False):
-    longest = 27 if is_vol_name else 31
+def _encode_name(name, kind='file'):
+    longest = {'file': 31, 'vol': 27, 'bb': 15}[kind]
 
     try:
         encoded = name.encode('mac_roman')
@@ -92,6 +92,10 @@ def _encode_name(name, is_vol_name=False):
         raise BadNameError(name)
 
     return encoded
+
+
+def _bb_name(name):
+    return bitmanip.pstring(_encode_name(name)).ljust(16)
 
 
 class _TempWrapper:
@@ -251,7 +255,7 @@ class Volume(directory.AbstractFolder):
         if size < 400 * 1024 or size % 512:
             raise ValueError('size must be a multiple of 512b and >= 800K')
 
-        drVN = _encode_name(self.name, is_vol_name=True)
+        drVN = _encode_name(self.name, 'vol')
 
         # overall layout:
         #   1. two boot blocks (offset=0)
@@ -319,6 +323,10 @@ class Volume(directory.AbstractFolder):
                 f.flags = 0x4000
                 self['Desktop DF'] = f
 
+        system_folder_cnid = 0
+        startapp_folder_cnid = 0
+        bootblocks = bytearray(1024)
+
         path2wrap = {(): godwrap, (self.name,): topwrap}
         drNxtCNID = 16
         for path, obj in self.iter_paths():
@@ -328,13 +336,30 @@ class Volume(directory.AbstractFolder):
             wrap.path = path
             wrap.cnid = drNxtCNID; drNxtCNID += 1
 
-            if isinstance(obj, File) and (obj.type, obj.creator) == (b'ZSYS', b'MACS'):
-                systemfolder = path2wrap[path[:-1]].cnid
-                systemfile = wrap
+            if isinstance(obj, File) and obj.type == b'ZSYS':
+                try:
+                    sysname = path[-1]
+
+                    fellows = path2wrap[path[:-1]].of.items()
+                    fndrname = next(n for (n, o) in fellows if isinstance(o, File) and o.type == b'FNDR')
+
+                    sysresources = parse_file(obj.rsrc)
+                    boot1 = next(r for r in sysresources if (r.type, r.id) == (b'boot', 1))
+                    bb = bytearray(boot1.data)
+                    if len(bb) != 1024: raise ValueError
+
+                    bb[0x0A:0x1A] = _bb_name(sysname)
+                    bb[0x1A:0x2A] = _bb_name(fndrname)
+
+                except:
+                    pass
+
+                else:
+                    bootblocks[:] = bb
+                    system_folder_cnid = path2wrap[path[:-1]].cnid
 
             if isinstance(obj, File) and path[1:] == tuple(startapp):
-                startfolder = path2wrap[path[:-1]].cnid
-                startname = path[-1]
+                startapp_folder_cnid = path2wrap[path[:-1]].cnid
 
             if isinstance(obj, File):
                 wrap.dfrk = wrap.rfrk = (0, 0)
@@ -358,7 +383,7 @@ class Volume(directory.AbstractFolder):
             if wrap.cnid == 1: continue
 
             obj = wrap.of
-            pstrname = bitmanip.pstring(_encode_name(path[-1]))
+            pstrname = bitmanip.pstring(_encode_name(path[-1], 'file'))
 
             mainrec_key = struct.pack('>L', path2wrap[path[:-1]].cnid) + pstrname
 
@@ -428,25 +453,12 @@ class Volume(directory.AbstractFolder):
         # Create the bitmap of free volume allocation blocks
         bitmap = bitmanip.bits(bitmap_blk_cnt * 512 * 8, len(blkaccum))
 
-        # Create the boot blocks
-        try:
-            if bootable:
-                sysresources = parse_file(systemfile.of.rsrc)
-                boot1 = next(r for r in sysresources if (r.type, r.id) == (b'boot', 1))
-                bootblocks = boot1.data
-                if len(bootblocks) != 1024: raise ValueError
-        except:
-            bootblocks = bytes(1024)
-            systemfolder = 0
-        bootblocks = bytearray(bootblocks)
-
         # Set the startup app
-        try:
-            if not systemfolder: raise ValueError
-            apname = bitmanip.pstring(_encode_name(startname))
-            bootblocks[0x5A:0x5A+len(apname)] = apname
-        except:
-            startfolder = 0
+        if system_folder_cnid and startapp_folder_cnid:
+            try:
+                bootblocks[0x5A:0x6A] = _bb_name(startapp[-1])
+            except:
+                startapp_folder_cnid = 0
 
         # Create the Volume Information Block
         drSigWord = b'BD'
@@ -462,7 +474,7 @@ class Volume(directory.AbstractFolder):
         drAtrb = 1<<8                  # volume attributes (hwlock, swlock, CLEANUNMOUNT, badblocks)
         drVolBkUp = 0                  # date and time of last backup
         drVSeqNum = 0                  # volume backup sequence number
-        drFndrInfo = struct.pack('>LLL28x', systemfolder, startfolder, startfolder)
+        drFndrInfo = struct.pack('>LLL28x', system_folder_cnid, startapp_folder_cnid, startapp_folder_cnid)
         drCrDate, drLsMod, drVolBkUp = self.crdate, self.mddate, self.bkdate
 
         vib = struct.pack('>2sLLHHHHHLLHLH28pLHLLLHLL32sHHHLHHxxxxxxxxLHHxxxxxxxx',
