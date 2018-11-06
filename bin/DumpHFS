@@ -1,16 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
-import os
-import os.path as path
-from machfs import Volume, Folder, File
-import macresources
-
-def any_exists(at_path):
-	if path.exists(at_path): return True
-	if path.exists(at_path + '.rdump'): return True
-	if path.exists(at_path + '.idump'): return True
-	return False
+from machfs import Volume
 
 args = argparse.ArgumentParser()
 
@@ -23,39 +14,4 @@ with open(args.src[0], 'rb') as f:
 	v = Volume()
 	v.read(f.read())
 
-written = []
-for p, obj in v.iter_paths():
-	nativepath = path.join(args.dir[0], *(comp.replace(path.sep, ':') for comp in p))
-
-	if isinstance(obj, Folder):
-		os.makedirs(nativepath, exist_ok=True)
-
-	elif obj.mddate != obj.bkdate or not any_exists(nativepath):
-		data = obj.data
-		if obj.type == b'TEXT':
-			data = data.decode('mac_roman').replace('\r', os.linesep).encode('utf8')
-
-		rsrc = obj.rsrc
-		if rsrc:
-			rsrc = macresources.parse_file(rsrc)
-			rsrc = macresources.make_rez_code(rsrc, ascii_clean=True)
-		
-		info = obj.type + obj.creator
-		if info == b'????????': info = b''
-
-		for thing, suffix in ((data, ''), (rsrc, '.rdump'), (info, '.idump')):
-			wholepath = nativepath + suffix
-			if thing or (suffix == '' and not rsrc):
-				written.append(wholepath)
-				with open(written[-1], 'wb') as f:
-					f.write(thing)
-			else:
-				try:
-					os.remove(wholepath)
-				except FileNotFoundError:
-					pass
-
-if written:
-	t = path.getmtime(written[-1])
-	for f in written:
-		os.utime(f, (t, t))
+v.write_folder(args.dir[0])
