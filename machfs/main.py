@@ -358,7 +358,7 @@ class Volume(directory.AbstractFolder):
                     bootblocks[:] = bb
                     system_folder_cnid = path2wrap[path[:-1]].cnid
 
-            if isinstance(obj, File) and path[1:] == tuple(startapp):
+            if isinstance(obj, File) and startapp and path[1:] == tuple(startapp):
                 startapp_folder_cnid = path2wrap[path[:-1]].cnid
 
             if isinstance(obj, File):
