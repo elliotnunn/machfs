@@ -338,7 +338,7 @@ class Volume(directory.AbstractFolder):
             wrap.path = path
             wrap.cnid = drNxtCNID; drNxtCNID += 1
 
-            if isinstance(obj, File) and obj.type == b'ZSYS':
+            if isinstance(obj, File) and obj.type.upper() == b'ZSYS':
                 try:
                     sysname = path[-1]
 
