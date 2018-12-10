@@ -3,6 +3,7 @@
 import argparse
 from datetime import datetime
 from machfs import Volume
+import os
 
 ########################################################################
 
@@ -58,7 +59,7 @@ args.add_argument('dest', metavar='OUTPUT', nargs=1, help='Destination file')
 args.add_argument('-n', '--name', default='untitled', action='store', help='volume name (default: untitled)')
 args.add_argument('-i', '--dir', action='store', help='folder to copy into the image')
 args.add_argument('-a', '--app', default=None, type=hfspathtpl, help='Path:To:Startup:App')
-args.add_argument('-s', '--size', default='800k', type=imgsize, action='store', help='volume size (default: size of OUTPUT)')
+args.add_argument('-s', '--size', default=None, type=imgsize, action='store', help='volume size (default: sized for OUTPUT, or 800k)')
 args.add_argument('-d', '--date', default='1994', type=hfsdat, action='store', help='creation & mod date (ISO-8601 or "now")')
 args.add_argument('--mpw-dates', action='store_true', help='''
     preserve the modification order of files by setting on-disk dates
@@ -70,11 +71,67 @@ args = args.parse_args()
 
 ########################################################################
 
+integral_sizes = [800*1024, 1024*1024]
+while integral_sizes[-1] < 2 * 1024**4: # absolute max = 2TB
+    integral_sizes.append(integral_sizes[-1] * 2)
+integral_sizes = [x // 512 for x in integral_sizes]
+
+def is_at_least(f, size):
+    try:
+        f.seek(size - 512)
+        if len(f.read(512)) == 512:
+            return True
+    except:
+        pass
+    return False
+
+def hack_file_size(f):
+    size = f.seek(0, 2) # seek to the end of the file
+    if size: # this should work most of the time, but...
+        size -= size % 512
+        return size
+
+    f.seek(0)
+    if len(f.read(1)) == 0: return 0
+
+    # exponentially increase the size...
+    left_ge = 0
+    for trysize in integral_sizes:
+        if is_at_least(f, trysize * 512):
+            left_ge = trysize
+        else:
+            right_lt = trysize
+            break
+    else:
+        return integral_sizes[-1] # reached max size
+    if left_ge == 0: return 0 # never got anywhere
+
+    # then refine with binary search
+    while left_ge + 1 < right_lt:
+        midpoint = left_ge + (right_lt - left_ge)//2
+        if is_at_least(f, midpoint * 512):
+            left_ge = midpoint
+        else:
+            right_lt = midpoint
+
+    return left_ge * 512
+
 vol = Volume()
 vol.name = args.name
 
 if args.dir: vol.read_folder(args.dir, date=args.date, mpw_dates=args.mpw_dates)
 
-image = vol.write(args.size, startapp=args.app)
-with open(args.dest[0], 'wb') as f:
-    f.write(image)
+with open(args.dest[0], 'ab+') as f:
+    if args.size is None: args.size = hack_file_size(f)
+    if args.size == 0: args.size = 800 * 1024
+
+with open(args.dest[0], 'rb+') as f:
+    left, gap, right = vol.write(args.size, startapp=args.app, sparse=True)
+
+    f.write(left)
+    f.seek(gap, 1)
+    problem = len(left) + gap - f.tell()
+    if problem > 0:
+        f.write(bytes(problem))
+    f.write(right)
+    f.truncate()
