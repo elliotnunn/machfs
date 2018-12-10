@@ -4,6 +4,9 @@ from os import path
 from macresources import make_rez_code, parse_rez_code, make_file, parse_file
 
 
+TEXT_TYPES = [b'TEXT', b'ttro'] # Teach Text read-only
+
+
 class AbstractFolder(collections.MutableMapping):
     def __init__(self, from_dict=()):
         self._prefdict = {} # lowercase to preferred
@@ -139,7 +142,7 @@ class AbstractFolder(collections.MutableMapping):
 
         for pathtpl, obj in self.iter_paths():
             try:
-                if obj.type == b'TEXT':
+                if obj.type in TEXT_TYPES:
                     obj.data = obj.data.decode('utf8').replace('\r\n', '\r').replace('\n', '\r').encode('mac_roman')
             except AttributeError:
                 pass
@@ -178,7 +181,7 @@ class AbstractFolder(collections.MutableMapping):
 
             elif obj.mddate != obj.bkdate or not any_exists(nativepath):
                 data = obj.data
-                if obj.type == b'TEXT':
+                if obj.type in TEXT_TYPES:
                     data = data.decode('mac_roman').replace('\r', os.linesep).encode('utf8')
 
                 rsrc = obj.rsrc
