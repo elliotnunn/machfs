@@ -45,6 +45,8 @@ def imgsize(x):
         factor = 1024*1024
     elif x.endswith('G'):
         factor = 1024*1024*1024
+    elif x.endswith('T'):
+        factor = 1024*1024*1024*1024
     else:
         factor = 1
         x += 'b'
