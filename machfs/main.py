@@ -218,7 +218,7 @@ class Volume(AbstractFolder):
         self.pop('Desktop DB', None)
         self.pop('Desktop DF', None)
 
-    def write(self, size=800*1024, align=512, desktopdb=True, bootable=True, startapp=None):
+    def write(self, size=800*1024, align=512, desktopdb=True, bootable=True, startapp=None, sparse=False):
         if align < 512 or align % 512:
             raise ValueError('align must be multiple of 512')
 
@@ -459,8 +459,17 @@ class Volume(AbstractFolder):
         vib += bytes(512-len(vib))
 
         assert all(len(x) == drAlBlkSiz for x in blkaccum)
-        finalchunks = [bootblocks, vib, bitmap, *blkaccum]
-        finalchunks.append(bytes(size - sum(len(x) for x in finalchunks) - 2*512))
-        finalchunks.append(vib)
-        finalchunks.append(bytes(512))
-        return b''.join(finalchunks)
+        left_elements = [bootblocks, vib, bitmap, *blkaccum]
+
+        unused_offset = sum(len(x) for x in left_elements)
+        unused_length = size - unused_offset - 2*512
+
+        right_elements = [vib, bytes(512)]
+
+        if sparse:
+            return b''.join(left_elements), unused_length, b''.join(right_elements)
+        else:
+            all_elements = left_elements
+            all_elements.append(bytes(unused_length))
+            all_elements.extend(right_elements)
+            return b''.join(all_elements)
