@@ -23,7 +23,7 @@ v['Folder']['File'] = File()
 v['Folder']['File'].data = b'Hello from Python!\r'
 v['Folder']['File'].rsrc = b'' # Use the macresources library to work with resource forks
 v['Folder']['File'].type = b'TEXT'
-v['Folder']['File'].creator = b'TTXT' # Teach Text/SimpleText
+v['Folder']['File'].creator = b'ttxt' # Teach Text/SimpleText
 
 with open('FloppyImage.dsk', 'wb') as f:
     flat = v.write(
