@@ -23,6 +23,12 @@ class AbstractFolder(MutableMapping):
         self.update(from_dict)
 
     def __setitem__(self, key, value):
+        if isinstance(key, tuple):
+            if len(key) == 1:
+                self[key[0]] = value
+            else:
+                self[key[0]][key[1:]] = value
+
         try:
             key = key.decode('mac_roman')
         except AttributeError:
@@ -35,6 +41,12 @@ class AbstractFolder(MutableMapping):
         self._maindict[lower] = value
 
     def __getitem__(self, key):
+        if isinstance(key, tuple):
+            if len(key) == 1:
+                return self[key[0]]
+            else:
+                return self[key[0]][key[1:]]
+
         try:
             key = key.decode('mac_roman')
         except AttributeError:
@@ -44,6 +56,12 @@ class AbstractFolder(MutableMapping):
         return self._maindict[lower]
 
     def __delitem__(self, key):
+        if isinstance(key, tuple):
+            if len(key) == 1:
+                del self[key[0]]
+            else:
+                del self[key[0]][key[1:]]
+
         try:
             key = key.decode('mac_roman')
         except AttributeError:
@@ -85,6 +103,26 @@ class AbstractFolder(MutableMapping):
             else:
                 for each_path, each_child in childs_children:
                     yield (name,) + each_path, each_child
+
+    def walk(self, topdown=True):
+        result = self._recursive_walk(my_path=(), topdown=topdown)
+
+        if not topdown:
+            result = list(result)
+            result.reverse()
+
+        return result
+
+    def _recursive_walk(self, my_path, topdown): # like os.walk, except dirpath is a tuple
+        dirnames = [n for (n, obj) in self.items() if isinstance(obj, AbstractFolder)]
+        filenames = [n for (n, obj) in self.items() if not isinstance(obj, AbstractFolder)]
+
+        yield (my_path, dirnames, filenames)
+
+        if not topdown: dirnames.reverse() # hack to account for reverse() in walk()
+
+        for dn in dirnames: # the caller can change dirnames in a loop
+            yield from self[dn]._recursive_walk(my_path=my_path+(dn,), topdown=topdown)
 
     def read_folder(self, folder_path, date=0, mpw_dates=False):
         def includefilter(n):
