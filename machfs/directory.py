@@ -2,9 +2,18 @@ from collections.abc import MutableMapping
 import os
 from os import path
 from macresources import make_rez_code, parse_rez_code, make_file, parse_file
+from warnings import warn
 
 
 TEXT_TYPES = [b'TEXT', b'ttro'] # Teach Text read-only
+
+
+def _unsyncability(name): # files named '_' reserved for directory Finder info
+    return name.endswith(('.rdump', '.idump')) or name.startswith('.') or name == '_'
+
+def _fuss_if_unsyncable(name):
+    if _unsyncability(name):
+        raise ValueError('Unsyncable name: %r' % name)
 
 
 class AbstractFolder(MutableMapping):
@@ -103,6 +112,8 @@ class AbstractFolder(MutableMapping):
             filenames[:] = [swapsep(x) for x in filenames if includefilter(x)]
 
             for dn in dirnames:
+                _fuss_if_unsyncable(dn)
+
                 newdir = Folder()
                 newdir.crdate = newdir.mddate = newdir.bkdate = date
                 tmptree[dirpath][dn] = newdir
@@ -110,6 +121,8 @@ class AbstractFolder(MutableMapping):
 
             for fn in filenames:
                 basename = mkbasename(fn)
+                _fuss_if_unsyncable(basename)
+
                 fullbase = path.join(dirpath, basename)
                 fullpath = path.join(dirpath, fn)
 
@@ -173,7 +186,15 @@ class AbstractFolder(MutableMapping):
             return False
 
         written = []
+        blacklist = list()
         for p, obj in self.iter_paths():
+            blacklist_test = ':'.join(p) + ':'
+            if blacklist_test.startswith(tuple(blacklist)): continue
+            if _unsyncability(p[-1]):
+                warn('Ignoring unsyncable name: %r' % (':' + ':'.join(p)))
+                blacklist.append(blacklist_test)
+                continue
+
             nativepath = path.join(folder_path, *(comp.replace(path.sep, ':') for comp in p))
 
             if isinstance(obj, Folder):
