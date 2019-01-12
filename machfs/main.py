@@ -223,7 +223,7 @@ class Volume(AbstractFolder):
             raise ValueError('align must be multiple of 512')
 
         if size < 400 * 1024 or size % 512:
-            raise ValueError('size must be a multiple of 512b and >= 800K')
+            raise ValueError('size must be a multiple of 512b and >= 400K')
 
         drVN = _encode_name(self.name, 'vol')
 
