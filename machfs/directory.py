@@ -1,4 +1,4 @@
-import collections
+from collections.abc import MutableMapping
 import os
 from os import path
 from macresources import make_rez_code, parse_rez_code, make_file, parse_file
@@ -7,7 +7,7 @@ from macresources import make_rez_code, parse_rez_code, make_file, parse_file
 TEXT_TYPES = [b'TEXT', b'ttro'] # Teach Text read-only
 
 
-class AbstractFolder(collections.MutableMapping):
+class AbstractFolder(MutableMapping):
     def __init__(self, from_dict=()):
         self._prefdict = {} # lowercase to preferred
         self._maindict = {} # lowercase to contents
