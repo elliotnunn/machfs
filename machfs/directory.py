@@ -15,6 +15,12 @@ def _fuss_if_unsyncable(name):
     if _unsyncability(name):
         raise ValueError('Unsyncable name: %r' % name)
 
+def _try_delete(name):
+    try:
+        os.remove(name)
+    except FileNotFoundError:
+        pass
+
 
 class AbstractFolder(MutableMapping):
     def __init__(self, from_dict=()):
@@ -234,34 +240,35 @@ class AbstractFolder(MutableMapping):
                 continue
 
             nativepath = path.join(folder_path, *(comp.replace(path.sep, ':') for comp in p))
+            info_path = nativepath + '.idump'
+            rsrc_path = nativepath + '.rdump'
 
             if isinstance(obj, Folder):
                 os.makedirs(nativepath, exist_ok=True)
 
             elif obj.mddate != obj.bkdate or not any_exists(nativepath):
+                # always write the data fork
                 data = obj.data
                 if obj.type in TEXT_TYPES:
                     data = data.decode('mac_roman').replace('\r', os.linesep).encode('utf8')
+                with open(nativepath, 'wb') as f:
+                    f.write(data)
 
-                rsrc = obj.rsrc
-                if rsrc:
-                    rsrc = parse_file(rsrc)
-                    rsrc = make_rez_code(rsrc, ascii_clean=True)
-                
-                info = obj.type + obj.creator
-                if info == b'????????': info = b''
+                # write a resource dump iff that fork has any bytes (dump may still be empty)
+                if obj.rsrc:
+                    with open(rsrc_path, 'wb') as f:
+                        rdump = make_rez_code(parse_file(obj.rsrc), ascii_clean=True)
+                        f.write(rdump)
+                else:
+                     _try_delete(rsrc_path)   
 
-                for thing, suffix in ((data, ''), (rsrc, '.rdump'), (info, '.idump')):
-                    wholepath = nativepath + suffix
-                    if thing or (suffix == '' and not rsrc):
-                        written.append(wholepath)
-                        with open(written[-1], 'wb') as f:
-                            f.write(thing)
-                    else:
-                        try:
-                            os.remove(wholepath)
-                        except FileNotFoundError:
-                            pass
+                # write an info dump iff either field is non-null
+                idump = obj.type + obj.creator
+                if any(idump):
+                    with open(info_path, 'wb') as f:
+                        f.write(idump)
+                else:
+                    _try_delete(info_path)
 
         if written:
             t = path.getmtime(written[-1])
