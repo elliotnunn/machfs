@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='machfs',
-    version='1.0',
+    version='1.2.4',
     author='Elliot Nunn',
     author_email='elliotnunn@me.com',
     description='Library for reading and writing Macintosh HFS volumes',
