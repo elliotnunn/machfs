@@ -121,6 +121,13 @@ class Volume(AbstractFolder):
         self.name = 'Untitled'
 
     def read(self, from_volume):
+        for i in range(0, len(from_volume), 512):
+            if from_volume[i+1024:i+1024+2] == b'BD':
+                if i: from_volume = from_volume[i:]
+                break
+        else:
+            raise ValueError('Magic number not found in image')
+
         drSigWord, drCrDate, drLsMod, drAtrb, drNmFls, \
         drVBMSt, drAllocPtr, drNmAlBlks, drAlBlkSiz, drClpSiz, drAlBlSt, \
         drNxtCNID, drFreeBks, drVN, drVolBkUp, drVSeqNum, \
