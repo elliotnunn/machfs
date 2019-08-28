@@ -9,7 +9,17 @@ TEXT_TYPES = [b'TEXT', b'ttro'] # Teach Text read-only
 
 
 def _unsyncability(name): # files named '_' reserved for directory Finder info
-    return name.endswith(('.rdump', '.idump')) or name.startswith('.') or name == '_'
+    if path.splitext(name)[1].lower() in ('.rdump', '.idump'): return True
+    if name.startswith('.'): return True
+    if name == '_': return True
+    if len(name) > 31: return True
+
+    try:
+        name.encode('mac_roman')
+    except UnicodeEncodeError:
+        return True
+
+    return False
 
 def _fuss_if_unsyncable(name):
     if _unsyncability(name):
@@ -20,6 +30,37 @@ def _try_delete(name):
         os.remove(name)
     except FileNotFoundError:
         pass
+
+def _symlink_rel(src, dst):
+    rel_path_src = path.relpath(src, path.dirname(dst))
+    os.symlink(rel_path_src, dst)
+
+def _get_datafork_paths(base):
+    """Symlinks are NOT GOOD"""
+    base = path.abspath(path.realpath(base))
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [x for x in dirnames if not _unsyncability(x)]
+        filenames[:] = [x for x in filenames if not _unsyncability(x)]
+
+        for kindcode, the_list in ((0, filenames), (1, dirnames)):
+            for fname in the_list:
+                nativepath = path.join(dirpath, fname)
+                hfspath = tuple(_swapsep(c) for c in path.relpath(nativepath, base).split(path.sep))
+
+                hfslink = kindcode # if not a link then default to this
+
+                if path.islink(nativepath):
+                    nativelink = path.realpath(nativepath)
+                    if len(path.commonpath((nativelink, base))) < len(base): continue
+
+                    hfslink = tuple(_swapsep(c) for c in path.relpath(nativelink, base).split(path.sep))
+                    if hfslink == (path.relpath('x', 'x'),): hfslink = () # nasty special case
+
+                yield nativepath, hfspath, hfslink
+
+def _swapsep(n):
+    return n.replace(':', path.sep)
+
 
 
 class AbstractFolder(MutableMapping):
@@ -32,8 +73,12 @@ class AbstractFolder(MutableMapping):
         if isinstance(key, tuple):
             if len(key) == 1:
                 self[key[0]] = value
+                return
+            elif len(key) == 0:
+                raise KeyError
             else:
                 self[key[0]][key[1:]] = value
+                return
 
         try:
             key = key.decode('mac_roman')
@@ -50,6 +95,8 @@ class AbstractFolder(MutableMapping):
         if isinstance(key, tuple):
             if len(key) == 1:
                 return self[key[0]]
+            elif len(key) == 0:
+                return self
             else:
                 return self[key[0]][key[1:]]
 
@@ -65,8 +112,12 @@ class AbstractFolder(MutableMapping):
         if isinstance(key, tuple):
             if len(key) == 1:
                 del self[key[0]]
+                return
+            elif len(key) == 0:
+                raise KeyError
             else:
                 del self[key[0]][key[1:]]
+                return
 
         try:
             key = key.decode('mac_roman')
@@ -131,78 +182,57 @@ class AbstractFolder(MutableMapping):
             yield from self[dn]._recursive_walk(my_path=my_path+(dn,), topdown=topdown)
 
     def read_folder(self, folder_path, date=0, mpw_dates=False):
-        def includefilter(n):
-            if n.startswith('.'): return False
-            if n.endswith('.rdump'): return True
-            if n.endswith('.idump'): return True
-            return True
-
-        def swapsep(n):
-            return n.replace(':', path.sep)
-
-        def mkbasename(n):
-            base, ext = path.splitext(n)
-            if ext in ('.rdump', '.idump'):
-                return base
-            else:
-                return n
-
         self.crdate = self.mddate = self.bkdate = date
 
-        tmptree = {folder_path: self}
+        deferred_aliases = []
+        for nativepath, hfspath, hfslink in _get_datafork_paths(folder_path):
+            if hfslink == 0: # file
+                thefile = File(); self[hfspath] = thefile
+                thefile.crdate = thefile.mddate = thefile.bkdate = date
 
-        for dirpath, dirnames, filenames in os.walk(folder_path):
-            dirnames[:] = [swapsep(x) for x in dirnames if includefilter(x)]
-            filenames[:] = [swapsep(x) for x in filenames if includefilter(x)]
-
-            for dn in dirnames:
-                _fuss_if_unsyncable(dn)
-
-                newdir = Folder()
-                newdir.crdate = newdir.mddate = newdir.bkdate = date
-                tmptree[dirpath][dn] = newdir
-                tmptree[path.join(dirpath, dn)] = newdir
-
-            for fn in filenames:
-                basename = mkbasename(fn)
-                _fuss_if_unsyncable(basename)
-
-                fullbase = path.join(dirpath, basename)
-                fullpath = path.join(dirpath, fn)
+                if mpw_dates: thefile.real_t = 0
 
                 try:
-                    thefile = tmptree[fullbase]
-                except KeyError:
-                    thefile = File()
-                    thefile.real_t = 0 # for the MPW hack
-                    thefile.crdate = thefile.mddate = thefile.bkdate = date
-                    thefile.contributors = []
-                    tmptree[fullbase] = thefile
-
-                if fn.endswith('.idump'):
-                    with open(fullpath, 'rb') as f:
+                    with open(nativepath + '.idump', 'rb') as f:
+                        if mpw_dates: thefile.real_t = max(thefile.real_t, path.getmtime(f.name))
                         thefile.type = f.read(4)
                         thefile.creator = f.read(4)
-                elif fn.endswith('rdump'):
-                    rez = open(fullpath, 'rb').read()
-                    resources = parse_rez_code(rez)
-                    resfork = make_file(resources, align=4)
-                    thefile.rsrc = resfork
-                else:
-                    thefile.data = open(fullpath, 'rb').read()
+                except FileNotFoundError:
+                    pass
 
-                thefile.contributors.append(fullpath)
-                if mpw_dates:
-                    thefile.real_t = max(thefile.real_t, path.getmtime(fullpath))
+                try:
+                    with open(nativepath + '.rdump', 'rb') as f:
+                        if mpw_dates: thefile.real_t = max(thefile.real_t, path.getmtime(f.name))
+                        thefile.rsrc = make_file(parse_rez_code(f.read()), align=4)
+                except FileNotFoundError:
+                    pass
 
-                tmptree[dirpath][basename] = thefile
+                with open(nativepath, 'rb') as f:
+                    if mpw_dates: thefile.real_t = max(thefile.real_t, path.getmtime(f.name))
+                    thefile.data = f.read()
 
-        for pathtpl, obj in self.iter_paths():
+                if thefile.type in TEXT_TYPES:
+                    thefile.data = thefile.data.replace(b'\r\n', b'\r').replace(b'\n', b'\r')
+                    try:
+                        thefile.data = thefile.data.decode('utf8').encode('mac_roman')
+                    except UnicodeEncodeError:
+                        pass # not happy, but whatever...
+
+            elif hfslink == 1: # folder
+                thedir = Folder(); self[hfspath] = thedir
+                thedir.crdate = thedir.mddate = thedir.bkdate = date
+
+            else: # symlink, i.e. alias
+                deferred_aliases.append((hfspath, hfslink)) # alias, targetpath
+
+        for aliaspath, targetpath in deferred_aliases:
             try:
-                if obj.type in TEXT_TYPES:
-                    obj.data = obj.data.decode('utf8').replace('\r\n', '\r').replace('\n', '\r').encode('mac_roman')
-            except AttributeError:
-                pass
+                alias = File()
+                alias.flags |= 0x8000
+                alias.aliastarget = self[targetpath]
+                self[aliaspath] = alias
+            except (KeyError, ValueError):
+                raise
 
         if mpw_dates:
             all_real_times = set()
@@ -231,6 +261,8 @@ class AbstractFolder(MutableMapping):
 
         written = []
         blacklist = list()
+        alias_fixups = list()
+        valid_alias_targets = dict()
         for p, obj in self.iter_paths():
             blacklist_test = ':'.join(p) + ':'
             if blacklist_test.startswith(tuple(blacklist)): continue
@@ -243,10 +275,15 @@ class AbstractFolder(MutableMapping):
             info_path = nativepath + '.idump'
             rsrc_path = nativepath + '.rdump'
 
+            valid_alias_targets[id(obj)] = nativepath
+
             if isinstance(obj, Folder):
                 os.makedirs(nativepath, exist_ok=True)
 
             elif obj.mddate != obj.bkdate or not any_exists(nativepath):
+                if obj.aliastarget is not None:
+                    alias_fixups.append((nativepath, id(obj.aliastarget)))
+
                 # always write the data fork
                 data = obj.data
                 if obj.type in TEXT_TYPES:
@@ -275,6 +312,21 @@ class AbstractFolder(MutableMapping):
             for w in written:
                 os.utime(w, (t, t))
 
+        for alias_path, target_id in alias_fixups:
+            try:
+                target_path = valid_alias_targets[target_id]
+            except KeyError:
+                pass
+            else:
+                _try_delete(alias_path)
+                _try_delete(alias_path + '.idump')
+                _try_delete(alias_path + '.rdump')
+
+                _symlink_rel(target_path, alias_path)
+                for ext in ('.idump', '.rdump'):
+                    if path.exists(target_path + ext):
+                        _symlink_rel(target_path + ext, alias_path + ext)
+
 
 class Folder(AbstractFolder):
     def __init__(self):
@@ -298,10 +350,17 @@ class File:
         self.locked = False
         self.crdate = self.mddate = self.bkdate = 0
 
+        self.aliastarget = None
+
         self.rsrc = bytearray()
         self.data = bytearray()
 
     def __str__(self):
+        if isinstance(self.aliastarget, File):
+            return '[alias] ' + str(self.aliastarget)
+        elif self.aliastarget is not None:
+            return '[alias to folder]'
+
         typestr, creatorstr = (x.decode('mac_roman') for x in (self.type, self.creator))
         dstr, rstr = (repr(bytes(x)) if 1 <= len(x) <= 32 else '%db' % len(x) for x in (self.data, self.rsrc))
         return '[%s/%s] data=%s rsrc=%s' % (typestr, creatorstr, dstr, rstr)

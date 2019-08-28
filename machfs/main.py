@@ -99,6 +99,85 @@ def _bb_name(name):
     return bitmanip.pstring(_encode_name(name)).ljust(16)
 
 
+def _common_prefix(*tuples):
+    for i in range(min(len(t) for t in tuples)):
+        for t in tuples[1:]:
+            if t[i] != tuples[0][i]:
+                return i
+
+    return 0
+
+
+def _link_aliases(vol_cr_date, cnid_dict): # vol creation date confirms within-volume alias
+    for cnid, obj in cnid_dict.items():
+        try:
+            if obj.flags & 0x8000:
+                alis_rsrc = next(r.data for r in parse_file(obj.rsrc) if r.type == b'alis')
+
+                # print(hex(obj.flags))
+                # print(obj)
+                # open('/tmp/interpreting' + hex(cnid),'wb').write(alis_rsrc)
+
+                userType, aliasSize, aliasVersion, \
+                thisAliasKind, volumeName, volumeCrDate, \
+                volumeSig, volumeType, parDirID, fileName, \
+                fileNum, fileCrDate, fileType, fdCreator, \
+                nlvlFrom, nlvlTo, volumeAttributes, volumeFSID \
+                = struct.unpack_from('>4s H hh 28p L 2s hL 64p LL 4s4s HHLh', alis_rsrc)
+
+                # print(userType, aliasSize, aliasVersion,
+                #     thisAliasKind, volumeName, volumeCrDate,
+                #     volumeSig, volumeType, parDirID, fileName,
+                #     fileNum, fileCrDate, fileType, fdCreator,
+                #     nlvlFrom, nlvlTo, volumeAttributes, volumeFSID)
+
+                if volumeCrDate != vol_cr_date: raise ValueError
+
+                obj.aliastarget = cnid_dict[fileNum]
+
+        except (AttributeError, KeyError, StopIteration, ValueError):
+            pass
+
+
+def _defer_special_files(iter_paths):
+    """Defer special files (aliases) to late CNIDs, and resolve aliases"""
+    approved_dict = dict()
+    unapproved = []
+
+    for path, obj in iter_paths:
+        if isinstance(obj, File) and obj.aliastarget is not None:
+            unapproved.append((path, obj))
+        else:
+            yield path, obj, None
+            approved_dict[id(obj)] = path
+
+    while unapproved:
+        made_progress = False
+
+        for i in reversed(range(len(unapproved))):
+            path, obj = unapproved[i]
+
+            try:
+                targetpath = approved_dict[id(obj.aliastarget)]
+            except KeyError:
+                continue
+
+            yield path, obj, targetpath
+            approved_dict[id(obj)] = path
+
+            unapproved.pop(i)
+            made_progress = True
+
+        if not made_progress: break
+
+
+def _alis_append(alis, kind, data):
+    if len(alis) % 2: alis.append(0)
+    alis.extend(struct.pack('>hH', kind, len(data)))
+    alis.extend(data)
+    if len(alis) % 2: alis.append(0)
+
+
 class _TempWrapper:
     """Volume uses this to store metadata while serialising"""
     def __init__(self, of):
@@ -225,6 +304,8 @@ class Volume(AbstractFolder):
         self.pop('Desktop DB', None)
         self.pop('Desktop DF', None)
 
+        _link_aliases(drCrDate, cnids)
+
     def write(self, size=800*1024, align=512, desktopdb=True, bootable=True, startapp=None, sparse=False):
         if align < 512 or align % 512:
             raise ValueError('align must be multiple of 512')
@@ -232,7 +313,11 @@ class Volume(AbstractFolder):
         if size < 400 * 1024 or size % 512:
             raise ValueError('size must be a multiple of 512b and >= 400K')
 
+        # These are declared up here because they are needed for aliases
         drVN = _encode_name(self.name, 'vol')
+        drSigWord = b'BD'
+        drAtrb = 1<<8                  # volume attributes (hwlock, swlock, CLEANUNMOUNT, badblocks)
+        drCrDate, drLsMod, drVolBkUp = self.crdate, self.mddate, self.bkdate
 
         # overall layout:
         #   1. two boot blocks (offset=0)
@@ -306,7 +391,7 @@ class Volume(AbstractFolder):
 
         path2wrap = {(): godwrap, (self.name,): topwrap}
         drNxtCNID = 16
-        for path, obj in self.iter_paths():
+        for path, obj, aliastarget in _defer_special_files(self.iter_paths()):
             path = (self.name,) + path
             wrap = _TempWrapper(obj)
             path2wrap[path] = wrap
@@ -339,14 +424,82 @@ class Volume(AbstractFolder):
                 startapp_folder_cnid = path2wrap[path[:-1]].cnid
 
             if isinstance(obj, File):
+                wrap.data, wrap.rsrc = obj.data, obj.rsrc
+                wrap.type, wrap.creator = obj.type, obj.creator
+
+            # This is the place to manage your special files (aliases for now)
+            if aliastarget is not None:
+                aliastarget = (self.name,) + aliastarget # match the convention for this function
+                targetobj = path2wrap[aliastarget].of # probe the target to set some metadata
+
+                if isinstance(targetobj, Folder):
+                    wrap.creator = b'MACS'
+                    wrap.type = b'fdrp'
+
+                elif isinstance(targetobj, Volume):
+                    wrap.creator = b'MACS'
+                    wrap.type = b'hdsk' if size > 1440*1024 else b'flpy'
+
+                elif isinstance(targetobj, File):
+                    wrap.creator = targetobj.creator
+
+                    if targetobj.type == b'APPL':
+                        wrap.type = b'adrp'
+                    else:
+                        wrap.type = targetobj.type
+
+                wrap.data = b''
+
+                userType = b''
+                aliasSize = 9999 # fill this short at offset 4
+                aliasVersion = 2
+                thisAliasKind = 1 if isinstance(targetobj, Folder) else 0
+                volumeName = drVN
+                volumeCrDate = drCrDate
+                volumeSig = drSigWord
+                volumeType = 5 #2 if size == 400*1024 else 3 if size == 800*1024 else 4 if size == 1440*1024 else 1
+                parDirID = path2wrap[aliastarget[:-1]].cnid
+                fileName = _encode_name(aliastarget[-1])
+                fileNum = path2wrap[aliastarget].cnid
+                fileCrDate = path2wrap[aliastarget].of.crdate
+                fileType = targetobj.type if isinstance(targetobj, File) else b''
+                fdCreator = targetobj.creator if isinstance(targetobj, File) else b''
+                nlvlFrom = len(path) - _common_prefix(path, aliastarget)
+                nlvlTo = len(aliastarget) - _common_prefix(path, aliastarget)
+                volumeAttributes = 0 # this is aliasmgr-specific
+                volumeFSID = 0
+
+                # Stress test: find file by name, not CNID
+                # fileNum = 0
+
+                alis = Resource(b'alis', 0, name=path[-1])
+                alis.data[:] = struct.pack('>4s H hh 28p L 2s hL 64p LL 4s4s HHLh',
+                    userType, aliasSize, aliasVersion, \
+                    thisAliasKind, volumeName, volumeCrDate, \
+                    volumeSig, volumeType, parDirID, fileName, \
+                    fileNum, fileCrDate, fileType, fdCreator, \
+                    nlvlFrom, nlvlTo, volumeAttributes, volumeFSID \
+                ) + bytes(10) # reserved stuff
+
+                _alis_append(alis.data, 0, aliastarget[-2].encode('mac_roman'))
+                _alis_append(alis.data, 2, ':'.join(aliastarget).encode('mac_roman'))
+                _alis_append(alis.data, -1, b'')
+
+                struct.pack_into('>H', alis.data, 4, len(alis.data))
+
+                # open('/tmp/creating','wb').write(alis.data)
+
+                wrap.rsrc = make_file([alis])
+
+            if isinstance(obj, File):
                 wrap.dfrk = wrap.rfrk = (0, 0)
-                if obj.data:
+                if wrap.data:
                     pre = len(blkaccum)
-                    accumulate(bitmanip.chunkify(obj.data, drAlBlkSiz))
+                    accumulate(bitmanip.chunkify(wrap.data, drAlBlkSiz))
                     wrap.dfrk = (pre, len(blkaccum)-pre)
-                if obj.rsrc:
+                if wrap.rsrc:
                     pre = len(blkaccum)
-                    accumulate(bitmanip.chunkify(obj.rsrc, drAlBlkSiz))
+                    accumulate(bitmanip.chunkify(wrap.rsrc, drAlBlkSiz))
                     wrap.rfrk = (pre, len(blkaccum)-pre)
 
         self._prefdict = root_dict_backup
@@ -370,10 +523,10 @@ class Volume(AbstractFolder):
                 cdrType = 2
                 filFlags = 1 << 1 # file thread record exists, but is not locked, nor "file record is used"
                 filTyp = 0
-                filUsrWds = struct.pack('>4s4sHHHxxxxxx', obj.type, obj.creator, obj.flags, obj.x, obj.y)
+                filUsrWds = struct.pack('>4s4sHHHxxxxxx', wrap.type, wrap.creator, obj.flags, obj.x, obj.y)
                 filFlNum = wrap.cnid
-                filStBlk, filLgLen, filPyLen = wrap.dfrk[0], len(obj.data), bitmanip.pad_up(len(obj.data), drAlBlkSiz)
-                filRStBlk, filRLgLen, filRPyLen = wrap.rfrk[0], len(obj.rsrc), bitmanip.pad_up(len(obj.rsrc), drAlBlkSiz)
+                filStBlk, filLgLen, filPyLen = wrap.dfrk[0], len(wrap.data), bitmanip.pad_up(len(wrap.data), drAlBlkSiz)
+                filRStBlk, filRLgLen, filRPyLen = wrap.rfrk[0], len(wrap.rsrc), bitmanip.pad_up(len(wrap.rsrc), drAlBlkSiz)
                 filCrDat, filMdDat, filBkDat = obj.crdate, obj.mddate, obj.bkdate
                 filFndrInfo = bytes(16) # todo must fix
                 filClpSize = 0 # todo must fix
@@ -438,7 +591,6 @@ class Volume(AbstractFolder):
                 startapp_folder_cnid = 0
 
         # Create the Volume Information Block
-        drSigWord = b'BD'
         drNmFls = sum(isinstance(x, File) for x in self.values())
         drNmRtDirs = sum(not isinstance(x, File) for x in self.values())
         drVBMSt = 3 # first block of volume bitmap
@@ -448,11 +600,9 @@ class Volume(AbstractFolder):
         drFreeBks = drNmAlBlks - len(blkaccum)
         drWrCnt = 0 # ????volume write count
         drVCSize = drVBMCSize = drCtlCSize = 0
-        drAtrb = 1<<8                  # volume attributes (hwlock, swlock, CLEANUNMOUNT, badblocks)
         drVolBkUp = 0                  # date and time of last backup
         drVSeqNum = 0                  # volume backup sequence number
         drFndrInfo = struct.pack('>LLL28x', system_folder_cnid, startapp_folder_cnid, startapp_folder_cnid)
-        drCrDate, drLsMod, drVolBkUp = self.crdate, self.mddate, self.bkdate
 
         vib = struct.pack('>2sLLHHHHHLLHLH28pLHLLLHLL32sHHHLHHxxxxxxxxLHHxxxxxxxx',
             drSigWord, drCrDate, drLsMod, drAtrb, drNmFls,
