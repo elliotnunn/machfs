@@ -167,7 +167,7 @@ def make_btree(records, bthKeyLen, blksize):
 
     # Populate the bitmap (1 = used)
     headnode.records[2] = bitmanip.bits(2048, len(nodelist))
-    for i, mnode in mapnodes:
+    for i, mnode in enumerate(mapnodes):
         nset = len(nodelist) - 2048 - i*3952
         mnode.records = [bitmanip.bits(3952, nset)]
 
