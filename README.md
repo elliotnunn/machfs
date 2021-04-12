@@ -7,7 +7,7 @@ codes](https://en.wikipedia.org/wiki/Creator_code) are first-class
 citizens.
 
 Python interface
-----------------
+================
 The Python API is simple. The contents of a `Volume` or a `Folder` are
 accessed using the index operator `[]`. While working on a filesystem,
 its entire high-level contents are stored in memory as a Python object.
@@ -42,7 +42,7 @@ with open('FloppyImage.dsk', 'rb') as f:
 ```
 
 Command-line interface
-----------------------
+======================
 This package also installs the `MakeHFS` and `DumpHFS` utilities, for
 working with folders on your native filesystem. Briefly, resource forks
 are stored in Rez-formatted `.rdump` files, and type and creator codes
@@ -56,7 +56,7 @@ Mac OS Roman encoding with Mac-style (CR) line endings.
 Both commands have a `--help` argument to display their options.
 
 Why?
-----
+====
 I want an automated, reproducible way to compile legacy MacOS software.
 Without any current operating system fully supporting HFS,
 [libhfs/hfsutils](https://www.mars.org/home/rob/proj/hfs/) (a C library
@@ -71,3 +71,11 @@ high-level programming language seemed like a reasonable tradeoff. As a
 result, `machfs` has nearly an order of magnitude fewer lines than
 `libhfs`, and is more maintainable, at a nearly negligible cost in
 performance.
+
+Changes
+=======
+1.3
+---
+- Sam Fuller's btree fix for volumes with *many* files:
+  https://github.com/elliotnunn/machfs/commit/b44a2f9
+- Support for Aliases, represented in the native FS as symlinks
