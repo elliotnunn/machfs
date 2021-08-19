@@ -264,6 +264,7 @@ class AbstractFolder(MutableMapping):
         alias_fixups = list()
         valid_alias_targets = dict()
         for p, obj in self.iter_paths():
+            p = [element.encode("mac_roman").decode("shift_jis") for element in p]
             blacklist_test = ':'.join(p) + ':'
             if blacklist_test.startswith(tuple(blacklist)): continue
             if _unsyncability(p[-1]):
