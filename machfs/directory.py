@@ -2,7 +2,7 @@ from collections.abc import MutableMapping
 import os
 from os import path
 from macresources import make_rez_code, parse_rez_code, make_file, parse_file
-from warnings import warn
+import sys
 
 
 TEXT_TYPES = [b'TEXT', b'ttro'] # Teach Text read-only
@@ -267,7 +267,7 @@ class AbstractFolder(MutableMapping):
             blacklist_test = ':'.join(p) + ':'
             if blacklist_test.startswith(tuple(blacklist)): continue
             if _unsyncability(p[-1]):
-                warn('Ignoring unsyncable name: %r' % (':' + ':'.join(p)))
+                print('Ignoring unsyncable name: %r' % (':' + ':'.join(p)), file=sys.stderr)
                 blacklist.append(blacklist_test)
                 continue
 
@@ -293,11 +293,17 @@ class AbstractFolder(MutableMapping):
 
                 # write a resource dump iff that fork has any bytes (dump may still be empty)
                 if obj.rsrc:
-                    with open(rsrc_path, 'wb') as f:
+                    try:
                         rdump = make_rez_code(parse_file(obj.rsrc), ascii_clean=True)
-                        f.write(rdump)
+                    except:
+                        with open(nativepath + '.rdump.corrupt', 'wb') as f:
+                            f.write(obj.rsrc)
+                        print('Dumping corrupt resource fork: %r' % (':' + ':'.join(p)), file=sys.stderr)
+                    else:
+                        with open(rsrc_path, 'wb') as f:
+                            f.write(rdump)
                 else:
-                     _try_delete(rsrc_path)   
+                     _try_delete(rsrc_path)
 
                 # write an info dump iff either field is non-null
                 idump = obj.type + obj.creator
