@@ -123,17 +123,62 @@ vol.name = args.name
 
 if args.dir: vol.read_folder(args.dir, date=args.date, mpw_dates=args.mpw_dates)
 
-with open(args.dest[0], 'ab+') as f:
-    if args.size is None: args.size = hack_file_size(f)
-    if args.size == 0: args.size = 800 * 1024
+try:
+    f = open(args.dest[0], 'rb+')
+    existed = True
+except FileNotFoundError:
+    f = open(args.dest[0], 'wb+')
+    existed = False
 
-with open(args.dest[0], 'rb+') as f:
-    left, gap, right = vol.write(args.size, startapp=args.app, sparse=True)
+if args.size is not None:
+    offset = 0
+    size = args.size
+    trunc = True
+    nameoffset = None
 
-    f.write(left)
-    f.seek(gap, 1)
-    problem = len(left) + gap - f.tell()
-    if problem > 0:
-        f.write(bytes(problem))
-    f.write(right)
-    f.truncate()
+elif not existed: # make a tiny floppy
+    offset = 0
+    size = 800 * 1024
+    trunc = True
+    nameoffset = None
+
+elif f.read(2) == b'ER': # is partitioned disk
+    blksize = int.from_bytes(f.read(2), byteorder='big')
+    f.seek(blksize + 4)
+    entrycnt = int.from_bytes(f.read(4), byteorder='big')
+
+    for i in range(entrycnt):
+        entryoffset = blksize * (i + 1)
+        f.seek(entryoffset + 48)
+        if f.read(10) == b'Apple_HFS\x00':
+            f.seek(entryoffset + 8)
+            offset = blksize * int.from_bytes(f.read(4), byteorder='big')
+            size = blksize * int.from_bytes(f.read(4), byteorder='big')
+            trunc = False
+            nameoffset = entryoffset + 16
+            break
+    else:
+        raise ValueError("No HFS partition in this map")
+
+else: # is raw filesystem
+    offset = 0
+    size = hack_file_size(f)
+    trunc = False
+
+left, gap, right = vol.write(size, startapp=args.app, sparse=True)
+
+f.seek(offset)
+f.write(left)
+f.seek(gap, 1)
+problem = len(left) + gap - f.tell()
+if problem > 0:
+    f.write(bytes(problem))
+f.write(right)
+
+if nameoffset is not None:
+    f.seek(nameoffset)
+    f.write(args.name.encode('mac_roman').ljust(32, b'\x00'))
+
+
+
+if trunc: f.truncate()
