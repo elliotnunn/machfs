@@ -2,6 +2,7 @@
 
 import argparse
 from machfs import Volume
+import os
 
 args = argparse.ArgumentParser()
 
@@ -9,6 +10,11 @@ args.add_argument('src', metavar='INPUT', nargs=1, help='Disk image')
 args.add_argument('dir', metavar='OUTPUT', nargs=1, help='Destination folder')
 
 args = args.parse_args()
+
+try:
+    os.mkdir(args.dir[0])
+except FileExistsError:
+    pass
 
 with open(args.src[0], 'rb') as f:
 	v = Volume()
