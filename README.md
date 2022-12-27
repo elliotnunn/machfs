@@ -79,3 +79,7 @@ Changes
 - Sam Fuller's btree fix for volumes with *many* files:
   https://github.com/elliotnunn/machfs/commit/b44a2f9
 - Support for Aliases, represented in the native FS as symlinks
+
+1.4
+---
+- Fix partitioned-disk support
