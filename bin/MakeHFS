@@ -164,6 +164,7 @@ else: # is raw filesystem
     offset = 0
     size = hack_file_size(f)
     trunc = False
+    nameoffset = None
 
 left, gap, right = vol.write(size, startapp=args.app, sparse=True)
 
