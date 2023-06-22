@@ -152,8 +152,8 @@ elif f.read(2) == b'ER': # is partitioned disk
         f.seek(entryoffset + 48)
         if f.read(10) == b'Apple_HFS\x00':
             f.seek(entryoffset + 8)
-            offset = blksize * int.from_bytes(f.read(4), byteorder='big')
-            size = blksize * int.from_bytes(f.read(4), byteorder='big')
+            offset = 512 * int.from_bytes(f.read(4), byteorder='big')
+            size = 512 * int.from_bytes(f.read(4), byteorder='big')
             trunc = False
             nameoffset = entryoffset + 16
             break
